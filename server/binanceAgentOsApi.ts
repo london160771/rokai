@@ -1,4 +1,4 @@
-import type { Asset } from '../src/mockData.ts'
+import type { Asset } from '../src/mockData'
 import type { Plugin, ViteDevServer } from 'vite'
 import { randomBytes } from 'node:crypto'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'

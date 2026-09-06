@@ -29,7 +29,7 @@ import {
   type Policy,
   type RuleResult,
 } from './rules'
-import { requestPolicyParse } from './policyParser'
+import { readApiJson, requestPolicyParse } from './policyParser'
 
 type Route = '/' | '/analysis' | '/result'
 type FlowState = 'idle' | 'checked' | 'approved' | 'verified'
@@ -168,15 +168,16 @@ function App() {
     setLiveError('')
     try {
       const response = await fetch('/api/live-portfolio')
-      const payload = await response.json() as { assets?: Asset[]; empty?: boolean; error?: string }
       if (response.status === 401) {
         const authResponse = await fetch('/api/binance/auth/start')
-        const authPayload = await authResponse.json() as { authorizationUrl?: string; error?: string }
-        if (!authResponse.ok || !authPayload.authorizationUrl) throw new Error(authPayload.error ?? 'Binance authorization could not be started.')
-        window.location.assign(authPayload.authorizationUrl)
+        const authResult = await readApiJson<{ authorizationUrl?: string }>(authResponse, 'Binance authorization could not be started.')
+        if (!authResult.ok || !authResult.payload.authorizationUrl) throw new Error(authResult.ok ? 'Binance authorization could not be started.' : authResult.error)
+        window.location.assign(authResult.payload.authorizationUrl)
         return
       }
-      if (!response.ok) throw new Error(payload.error ?? 'Binance Agent OS data could not be loaded safely.')
+      const liveResult = await readApiJson<{ assets?: Asset[]; empty?: boolean }>(response, 'Binance Agent OS data could not be loaded safely.')
+      if (!liveResult.ok) throw new Error(liveResult.error)
+      const payload = liveResult.payload
       if (!Array.isArray(payload.assets)) throw new Error('Binance Agent OS returned an invalid portfolio.')
       setAssets(payload.assets)
       setPortfolioMode('live')

@@ -3,7 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { auth, UnauthorizedError, type OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js'
-import { fetchLivePortfolio, type McpToolExecutor } from './binanceAgentOsApi.ts'
+import { fetchLivePortfolio, type McpToolExecutor } from './binanceAgentOsApi'
 
 const officialBinanceMcpUrl = 'https://agent.binance.com/mcp/agentic'
 const sessionCookieName = 'rokai_binance_session'

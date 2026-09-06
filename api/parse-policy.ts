@@ -1,14 +1,21 @@
-import { parseWithGemini } from '../server/geminiPolicyApi.ts'
+import { parseWithGemini } from '../server/geminiPolicyApi'
 
 const maxPolicyLength = 4000
 
 export default async function handler(request: Request): Promise<Response> {
   if (request.method !== 'POST') return Response.json({ error: 'Only POST is supported.' }, { status: 405 })
+  let body: { text?: unknown }
   try {
-    const body = await request.json() as { text?: unknown }
-    if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > maxPolicyLength) {
-      return Response.json({ error: 'Enter a policy between 1 and 4,000 characters.' }, { status: 400 })
-    }
+    body = await request.json() as { text?: unknown }
+  } catch (error) {
+    return Response.json({ error: 'Request body was not valid JSON.' }, { status: 400 })
+  }
+
+  if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > maxPolicyLength) {
+    return Response.json({ error: 'Enter a policy between 1 and 4,000 characters.' }, { status: 400 })
+  }
+
+  try {
     const structured = await parseWithGemini(body.text, process.env.GEMINI_API_KEY, process.env.GEMINI_MODEL || 'gemini-3.7-flash')
     return Response.json({ structured, source: 'gemini' })
   } catch (error) {

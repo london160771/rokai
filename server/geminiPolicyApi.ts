@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Plugin } from 'vite'
-import { normalizeStructuredPolicy, type StructuredPolicy } from '../src/policyParser.ts'
+import { normalizeStructuredPolicy, type StructuredPolicy } from '../src/policyParser'
 
 const DEFAULT_MODEL = 'gemini-3.7-flash'
 const MAX_POLICY_LENGTH = 4000
@@ -55,7 +55,11 @@ async function readBody(request: IncomingMessage): Promise<ApiRequest> {
     body += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk as Uint8Array)
     if (body.length > MAX_POLICY_LENGTH + 100) throw new Error('Request body is too large.')
   }
-  return JSON.parse(body) as ApiRequest
+  try {
+    return JSON.parse(body) as ApiRequest
+  } catch {
+    throw new Error('Request body was not valid JSON.')
+  }
 }
 
 function extractText(payload: unknown) {
@@ -108,7 +112,16 @@ async function parseGeminiResponse(text: string, apiKey: string, model: string, 
     })
 
     if (!response.ok) throw new Error(`Gemini request failed with status ${response.status}.`)
-    const payload = await response.json() as unknown
+    if (!(response.headers.get('content-type')?.toLowerCase() ?? '').includes('json')) {
+      throw new Error('Gemini returned an invalid response.')
+    }
+
+    let payload: unknown
+    try {
+      payload = await response.json() as unknown
+    } catch {
+      throw new Error('Gemini returned invalid JSON.')
+    }
     const modelText = extractText(payload)
     if (!modelText) throw new Error('Gemini returned an empty policy.')
 

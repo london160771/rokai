@@ -1,4 +1,4 @@
-import type { Policy, Rule } from './rules.ts'
+import type { Policy, Rule } from './rules'
 
 export type StructuredPolicy = {
   minStablecoinPercent?: number
@@ -53,6 +53,37 @@ function normalizeSymbol(value: unknown) {
   if (typeof value !== 'string') return null
   const symbol = value.trim().toUpperCase()
   return symbolPattern.test(symbol) ? symbol : null
+}
+
+type ApiJsonResult<T> =
+  | { ok: true; payload: T }
+  | { ok: false; error: string }
+
+export async function readApiJson<T>(response: Response, fallback: string): Promise<ApiJsonResult<T>> {
+  const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
+
+  if (!response.ok) {
+    if (response.status >= 500 || !contentType.includes('json')) return { ok: false, error: fallback }
+    try {
+      const body = await response.json() as unknown
+      if (isRecord(body) && typeof body.error === 'string' && body.error.trim()) {
+        return { ok: false, error: body.error }
+      }
+    } catch {
+      // A non-JSON or truncated error body should never leak a parser exception to the UI.
+    }
+    return { ok: false, error: fallback }
+  }
+
+  if (!contentType.includes('json')) {
+    return { ok: false, error: 'Rokai received an invalid server response. Please try again.' }
+  }
+
+  try {
+    return { ok: true, payload: await response.json() as T }
+  } catch {
+    return { ok: false, error: 'Rokai received an invalid server response. Please try again.' }
+  }
 }
 
 export function normalizeStructuredPolicy(value: unknown, sourceText: string): NormalizedPolicy {
@@ -157,10 +188,10 @@ export async function requestPolicyParse(sourceText: string): Promise<PolicyPars
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: sourceText }),
     })
-    const payload = await response.json() as { structured?: unknown; error?: string }
-    if (!response.ok) return { policy: null, source: 'none', error: payload.error ?? 'Gemini could not parse that policy.' }
+    const result = await readApiJson<{ structured?: unknown }>(response, 'Gemini could not parse that policy.')
+    if (!result.ok) return { policy: null, source: 'none', error: result.error }
 
-    const normalized = normalizeStructuredPolicy(payload.structured, sourceText)
+    const normalized = normalizeStructuredPolicy(result.payload.structured, sourceText)
     return normalized.policy
       ? { policy: normalized.policy, source: 'gemini' }
       : { policy: null, source: 'none', error: normalized.error }

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { normalizeStructuredPolicy } from '../src/policyParser.ts'
+import { normalizeStructuredPolicy, readApiJson } from '../src/policyParser.ts'
 import { applyPlan, buildPlan, evaluateRules, parseDemoPolicy } from '../src/rules.ts'
 import { cloneMockAssets } from '../src/mockData.ts'
 import { detectExpectedRuleTypes, missingRuleTypes, parseWithGemini } from '../server/geminiPolicyApi.ts'
@@ -66,6 +66,18 @@ assert.equal(parseDemoPolicy('Buy more ETH whenever the market dips.').policy, n
 assert.equal(parseDemoPolicy('Always keep at least 1,000 BTC.').policy, null)
 
 const originalFetch = globalThis.fetch
+const plainTextError = await readApiJson<{ structured?: unknown }>(
+  new Response('An error occurred while serving this request.', { status: 500, headers: { 'Content-Type': 'text/plain' } }),
+  'Gemini could not parse that policy.',
+)
+assert.deepEqual(plainTextError, { ok: false, error: 'Gemini could not parse that policy.' })
+
+const invalidSuccess = await readApiJson<{ structured?: unknown }>(
+  new Response('<html>Vercel error</html>', { status: 200, headers: { 'Content-Type': 'text/html' } }),
+  'Gemini could not parse that policy.',
+)
+assert.deepEqual(invalidSuccess, { ok: false, error: 'Rokai received an invalid server response. Please try again.' })
+
 const geminiResponse = (structured: unknown) => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(structured) }] } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
 let retryCalls = 0
 globalThis.fetch = async () => {
