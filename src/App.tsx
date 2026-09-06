@@ -29,6 +29,7 @@ import {
   type Policy,
   type RuleResult,
 } from './rules'
+import { requestPolicyParse } from './policyParser'
 
 type Route = '/' | '/analysis' | '/result'
 type FlowState = 'idle' | 'checked' | 'approved' | 'verified'
@@ -67,6 +68,7 @@ function App() {
   const [notice, setNotice] = useState('')
   const [plan, setPlan] = useState<Plan | null>(null)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [parserSource, setParserSource] = useState<'gemini' | 'fallback' | null>(null)
 
   useEffect(() => {
     const onPopState = () => setRoute(readRoute())
@@ -96,24 +98,37 @@ function App() {
   )
   const previewResults = useMemo(() => policy ? evaluateRules(previewAssets, policy) : [], [policy, previewAssets])
 
-  function checkPortfolio() {
-    const parsed = parseDemoPolicy(input)
-    if (!parsed.policy) {
-      setError(parsed.error ?? 'Could not understand that rule.')
-      setPolicy(null)
-      setPlan(null)
-      setFlow('idle')
-      return
-    }
+  async function checkPortfolio() {
     setError('')
+    setNotice('')
+    setParserSource(null)
     setIsAnalyzing(true)
-    window.setTimeout(() => {
-      setPolicy(parsed.policy)
-      setPlan(buildPlan(assets, parsed.policy!))
-      setFlow('checked')
-      setIsAnalyzing(false)
-      navigate('/analysis')
-    }, 620)
+    const parsed = await requestPolicyParse(input)
+    let nextPolicy = parsed.policy
+
+    if (!nextPolicy) {
+      const fallback = parseDemoPolicy(input)
+      if (fallback.policy) {
+        nextPolicy = fallback.policy
+        setParserSource('fallback')
+        setNotice('Gemini unavailable. Using the deterministic mock parser for this supported rule.')
+      } else {
+        setError(parsed.error ? `${parsed.error} ${fallback.error ?? ''}`.trim() : fallback.error ?? 'Could not understand that rule.')
+        setPolicy(null)
+        setPlan(null)
+        setFlow('idle')
+        setIsAnalyzing(false)
+        return
+      }
+    } else {
+      setParserSource('gemini')
+    }
+
+    setPolicy(nextPolicy)
+    setPlan(buildPlan(assets, nextPolicy))
+    setFlow('checked')
+    setIsAnalyzing(false)
+    navigate('/analysis')
   }
 
   function approvePlan() {
@@ -136,6 +151,7 @@ function App() {
     setFlow('idle')
     setError('')
     setNotice('')
+    setParserSource(null)
     setInput(DEMO_POLICY_TEXT)
     navigate('/')
   }
@@ -145,7 +161,7 @@ function App() {
       <div className="background-grid" aria-hidden="true" />
       <Header route={route} onConnect={() => setNotice('Binance connection is reserved for a later phase.')} />
       <div className="page-frame" key={route}>
-        {route === '/' && <LandingPage input={input} setInput={setInput} onAnalyze={checkPortfolio} error={error} portfolio={portfolio} />}
+        {route === '/' && <LandingPage input={input} setInput={setInput} onAnalyze={checkPortfolio} error={error} portfolio={portfolio} parserSource={parserSource} />}
         {route === '/analysis' && policy && plan && <AnalysisPage policy={policy} results={results} previewResults={previewResults} plan={plan} onApprove={approvePlan} onBack={() => navigate('/')} />}
         {route === '/result' && policy && plan && <ResultPage plan={plan} results={previewResults} onComplete={completeMockExecution} onReset={resetFlow} onViewPortfolio={() => navigate('/')} />}
       </div>
@@ -171,7 +187,7 @@ function Header({ route, onConnect }: { route: Route; onConnect: () => void }) {
   </header>
 }
 
-function LandingPage({ input, setInput, onAnalyze, error, portfolio }: { input: string; setInput: (value: string) => void; onAnalyze: () => void; error: string; portfolio: ReturnType<typeof valuePortfolio> }) {
+function LandingPage({ input, setInput, onAnalyze, error, portfolio, parserSource }: { input: string; setInput: (value: string) => void; onAnalyze: () => void; error: string; portfolio: ReturnType<typeof valuePortfolio>; parserSource: 'gemini' | 'fallback' | null }) {
   const examples = ['Keep 30% in USDC', 'Never sell BTC', 'No altcoin above 20%']
   return <>
     <section className="landing section-wrap">
@@ -182,7 +198,7 @@ function LandingPage({ input, setInput, onAnalyze, error, portfolio }: { input: 
         <div className="signal-line"><span /><b>CALM MODE ACTIVE</b><span /></div>
       </div>
       <div className="policy-panel">
-        <div className="panel-top"><span className="panel-index">01</span><span className="panel-title">Your policy</span><span className="parser-badge"><ScanLine size={12} /> MOCK PARSER</span></div>
+        <div className="panel-top"><span className="panel-index">01</span><span className="panel-title">Your policy</span><span className="parser-badge"><ScanLine size={12} /> {parserSource === 'fallback' ? 'MOCK FALLBACK' : 'GEMINI PARSER'}</span></div>
         <label htmlFor="policy-input">What must stay true?</label>
         <textarea id="policy-input" value={input} onChange={(event) => setInput(event.target.value)} />
         <div className="policy-bottom">
