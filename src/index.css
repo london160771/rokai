@@ -32,6 +32,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid #b85a42; outli
 .journey-steps span { transition-duration: .36s; }
 .examples button { transition-duration: .36s; }
 .primary-cta, .agent-cta { transition-duration: .36s; }
+.mode-switch button { display: flex; align-items: center; gap: 6px; padding: 6px 8px; color: #999991; background: transparent; border: 0; border-radius: 4px; font: inherit; }.mode-switch button:disabled { cursor: wait; }.mode-switch .mode-live { color: #55735b; background: #f8fbf5; }.mode-switch .mode-live i { width: 5px; height: 5px; background: #648269; border-radius: 50%; }.portfolio-empty { display: flex; align-items: center; gap: 14px; margin-top: 12px; padding: 24px; color: #7a8176; border: 1px dashed #cfd3c8; background: #faf9f4; }.portfolio-empty > svg { flex: 0 0 auto; color: #648269; }.portfolio-empty strong { display: block; color: #3d433b; font-size: 15px; }.portfolio-empty p { margin: 5px 0 0; font-size: 13px; }.portfolio-empty .secondary-cta { margin-left: auto; padding: 10px 13px; }.portfolio-empty.is-error { color: #956455; border-color: #dfc3b9; background: #fff9f6; }.portfolio-empty.is-error > svg { color: #b85a42; }
 .asset-card { transition-duration: .42s; }
 .page-frame { animation-duration: .76s; }
 .rule-review-card { animation-duration: .78s; }

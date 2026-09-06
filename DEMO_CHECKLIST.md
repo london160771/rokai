@@ -21,6 +21,7 @@ Use Mock Mode unless live execution has been explicitly approved and rehearsed.
 - Mock execution updates balances and verification returns the expected result.
 - Browser is sized to show the full one-page flow without scrolling surprises.
 - No real API keys, real account identifiers, or sensitive balances are visible.
+- If testing Phase 3/3.5, `BINANCE_AGENT_OS_MCP_URL` points to Binance's official MCP endpoint (the default), `ROKAI_PUBLIC_URL` is a public HTTPS origin, and the browser completes Binance OAuth; the browser never receives tokens or credentials.
 
 ## Supported MVP policy rules
 
@@ -34,6 +35,8 @@ Rokai Phase 2.5 supports these five deterministic rule types:
 
 Phase 3 (Binance Agent OS integration) starts only after Phase 2.5 is complete and reviewed.
 
+Phase 3 live mode is read-only: it uses Agentic Spot balances and live Spot prices for deterministic evaluation. Any execution remains unavailable until the later execution phase.
+
 ## Fallback behavior
 
 If Gemini, price data, Binance Agent OS/MCP, or the network is unavailable:
@@ -44,6 +47,8 @@ If Gemini, price data, Binance Agent OS/MCP, or the network is unavailable:
 - Never present simulated execution as a real Binance trade.
 
 If a live demo is attempted, stop on stale data, missing permissions, an unexpected plan, or any execution error; return to Mock Mode.
+
+Phase 3/3.5 Live Mode remains read-only. No live execution is available until the later execution phase.
 
 ## Success criteria
 

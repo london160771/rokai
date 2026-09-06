@@ -33,6 +33,8 @@ import { requestPolicyParse } from './policyParser'
 
 type Route = '/' | '/analysis' | '/result'
 type FlowState = 'idle' | 'checked' | 'approved' | 'verified'
+type PortfolioMode = 'mock' | 'live'
+type LiveStatus = 'idle' | 'loading' | 'ready' | 'empty' | 'error'
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
 const moneyPrecise = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
@@ -82,6 +84,9 @@ function App() {
   const [route, setRoute] = useState<Route>(() => readRoute())
   const [input, setInput] = useState(DEMO_POLICY_TEXT)
   const [assets, setAssets] = useState<Asset[]>(cloneMockAssets)
+  const [portfolioMode, setPortfolioMode] = useState<PortfolioMode>('mock')
+  const [liveStatus, setLiveStatus] = useState<LiveStatus>('idle')
+  const [liveError, setLiveError] = useState('')
   const [policy, setPolicy] = useState<Policy | null>(null)
   const [flow, setFlow] = useState<FlowState>('idle')
   const [error, setError] = useState('')
@@ -108,6 +113,13 @@ function App() {
   useEffect(() => {
     window.scrollTo(0, 0)
   }, [route])
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('binance') === 'connected') {
+      window.history.replaceState({}, '', window.location.pathname)
+      void connectLive()
+    }
+  }, [])
 
   const portfolio = useMemo(() => valuePortfolio(assets), [assets])
   const results = useMemo(() => policy ? evaluateRules(assets, policy) : [], [assets, policy])
@@ -151,7 +163,56 @@ function App() {
     navigate('/analysis')
   }
 
+  async function connectLive() {
+    setLiveStatus('loading')
+    setLiveError('')
+    try {
+      const response = await fetch('/api/live-portfolio')
+      const payload = await response.json() as { assets?: Asset[]; empty?: boolean; error?: string }
+      if (response.status === 401) {
+        const authResponse = await fetch('/api/binance/auth/start')
+        const authPayload = await authResponse.json() as { authorizationUrl?: string; error?: string }
+        if (!authResponse.ok || !authPayload.authorizationUrl) throw new Error(authPayload.error ?? 'Binance authorization could not be started.')
+        window.location.assign(authPayload.authorizationUrl)
+        return
+      }
+      if (!response.ok) throw new Error(payload.error ?? 'Binance Agent OS data could not be loaded safely.')
+      if (!Array.isArray(payload.assets)) throw new Error('Binance Agent OS returned an invalid portfolio.')
+      setAssets(payload.assets)
+      setPortfolioMode('live')
+      setLiveStatus(payload.empty ? 'empty' : 'ready')
+      setPolicy(null)
+      setPlan(null)
+      setFlow('idle')
+      setError('')
+      setNotice(payload.empty ? 'Agentic Spot is connected with no non-zero balances.' : 'Live Spot portfolio loaded from Binance Agent OS.')
+      navigate('/')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Binance Agent OS data could not be loaded safely.'
+      setLiveStatus('error')
+      setLiveError(message)
+      if (portfolioMode === 'live') setAssets([])
+      setNotice(`Live Mode unavailable: ${message}`)
+    }
+  }
+
+  function useMockPortfolio() {
+    setAssets(cloneMockAssets())
+    setPortfolioMode('mock')
+    setLiveStatus('idle')
+    setLiveError('')
+    setNotice('Mock portfolio restored.')
+    setPolicy(null)
+    setPlan(null)
+    setFlow('idle')
+    navigate('/')
+  }
+
   function approvePlan() {
+    if (portfolioMode === 'live') {
+      setNotice('Live Mode is read-only in Phase 3. Switch to Mock Mode to simulate the reviewed plan.')
+      return
+    }
     if (!currentPlan || !currentPlan.safe || !currentPlan.actions.length) return
     setPlan(currentPlan)
     setFlow('approved')
@@ -179,20 +240,20 @@ function App() {
   return (
     <main className="app-shell">
       <div className="background-grid" aria-hidden="true" />
-      <Header route={route} onConnect={() => setNotice('Binance connection is reserved for a later phase.')} />
+      <Header route={route} mode={portfolioMode} liveStatus={liveStatus} onConnect={connectLive} onUseMock={useMockPortfolio} />
       <div className="page-frame" key={route}>
-        {route === '/' && <LandingPage input={input} setInput={setInput} onAnalyze={checkPortfolio} error={error} portfolio={portfolio} parserSource={parserSource} />}
-        {route === '/analysis' && policy && plan && <AnalysisPage policy={policy} results={results} previewResults={previewResults} plan={plan} onApprove={approvePlan} onBack={() => navigate('/')} />}
+        {route === '/' && <LandingPage input={input} setInput={setInput} onAnalyze={checkPortfolio} error={error} portfolio={portfolio} parserSource={parserSource} mode={portfolioMode} liveStatus={liveStatus} liveError={liveError} onConnect={connectLive} onUseMock={useMockPortfolio} />}
+        {route === '/analysis' && policy && plan && <AnalysisPage policy={policy} results={results} previewResults={previewResults} plan={plan} mode={portfolioMode} onApprove={approvePlan} onBack={() => navigate('/')} />}
         {route === '/result' && policy && plan && <ResultPage plan={plan} results={previewResults} onComplete={completeMockExecution} onReset={resetFlow} onViewPortfolio={() => navigate('/')} />}
       </div>
       {isAnalyzing && <AnalysisTransition />}
       {notice && <div className="toast" role="status"><CircleAlert size={16} /> {notice}<button type="button" aria-label="Dismiss notice" onClick={() => setNotice('')}><X size={14} /></button></div>}
-      <footer className="site-footer"><span><ShieldCheck size={14} /> Deterministic checks · Mock data only</span><span>Rokai v0.1 · Calm decisions by design</span></footer>
+      <footer className="site-footer"><span><ShieldCheck size={14} /> Deterministic checks · {portfolioMode === 'live' ? 'Agent OS data' : 'Mock data'}</span><span>Rokai v0.1 · Calm decisions by design</span></footer>
     </main>
   )
 }
 
-function Header({ route, onConnect }: { route: Route; onConnect: () => void }) {
+function Header({ route, mode, liveStatus, onConnect, onUseMock }: { route: Route; mode: PortfolioMode; liveStatus: LiveStatus; onConnect: () => void; onUseMock: () => void }) {
   const steps = [{ route: '/', label: 'Set rules' }, { route: '/analysis', label: 'Review plan' }, { route: '/result', label: 'Verify' }]
   const goHome = () => { window.history.pushState({}, '', '/'); window.dispatchEvent(new PopStateEvent('popstate')) }
   return <header className="topbar">
@@ -201,13 +262,13 @@ function Header({ route, onConnect }: { route: Route; onConnect: () => void }) {
     </button>
     <div className="journey-steps" aria-label="Flow progress">{steps.map((step, index) => <span className={step.route === route ? 'is-current' : steps.findIndex((item) => item.route === route) > index ? 'is-done' : ''} key={step.route}><i>{`0${index + 1}`}</i>{step.label}</span>)}</div>
     <div className="top-actions">
-      <div className="mode-switch" aria-label="Current mode"><span className="mode-active"><i /> Mock</span><span className="mode-locked">Live <LockKeyhole size={11} /></span></div>
-      <button className="connect-button" type="button" onClick={onConnect}>Connect Binance <ChevronRight size={14} /></button>
+      <div className="mode-switch" aria-label="Current mode"><button className={mode === 'mock' ? 'mode-active' : ''} type="button" onClick={onUseMock}><i /> Mock</button><button className={mode === 'live' ? 'mode-live' : 'mode-locked'} type="button" onClick={onConnect} disabled={liveStatus === 'loading'}>Live {liveStatus === 'loading' ? <RefreshCw className="spin" size={11} /> : <LockKeyhole size={11} />}</button></div>
+      <button className="connect-button" type="button" onClick={onConnect} disabled={liveStatus === 'loading'}>{mode === 'live' ? 'Refresh Live Data' : 'Connect Binance'} <ChevronRight size={14} /></button>
     </div>
   </header>
 }
 
-function LandingPage({ input, setInput, onAnalyze, error, portfolio, parserSource }: { input: string; setInput: (value: string) => void; onAnalyze: () => void; error: string; portfolio: ReturnType<typeof valuePortfolio>; parserSource: 'gemini' | 'fallback' | null }) {
+function LandingPage({ input, setInput, onAnalyze, error, portfolio, parserSource, mode, liveStatus, liveError, onConnect, onUseMock }: { input: string; setInput: (value: string) => void; onAnalyze: () => void; error: string; portfolio: ReturnType<typeof valuePortfolio>; parserSource: 'gemini' | 'fallback' | null; mode: PortfolioMode; liveStatus: LiveStatus; liveError: string; onConnect: () => void; onUseMock: () => void }) {
   const examples = ['Keep 30% in USDC', 'Never sell BTC', 'No altcoin above 20%']
   return <>
     <section className="landing section-wrap">
@@ -223,28 +284,30 @@ function LandingPage({ input, setInput, onAnalyze, error, portfolio, parserSourc
         <textarea id="policy-input" value={input} onChange={(event) => setInput(event.target.value)} />
         <div className="policy-bottom">
           <div className="examples"><span>Try a rule</span>{examples.map((example) => <button key={example} type="button" onClick={() => setInput(example)}>{example}</button>)}</div>
-          <button className="primary-cta" type="button" onClick={onAnalyze}>Analyze My Portfolio <ArrowUpRight size={17} /></button>
+          <button className="primary-cta" type="button" onClick={onAnalyze} disabled={mode === 'live' && liveStatus === 'empty'}>Analyze My Portfolio <ArrowUpRight size={17} /></button>
         </div>
         {error && <div className="inline-error"><CircleAlert size={15} /> {error}</div>}
       </div>
     </section>
-    <PortfolioOverview portfolio={portfolio} />
+    <PortfolioOverview portfolio={portfolio} mode={mode} liveStatus={liveStatus} liveError={liveError} onConnect={onConnect} onUseMock={onUseMock} />
   </>
 }
 
-function PortfolioOverview({ portfolio }: { portfolio: ReturnType<typeof valuePortfolio> }) {
+function PortfolioOverview({ portfolio, mode, liveStatus, liveError, onConnect, onUseMock }: { portfolio: ReturnType<typeof valuePortfolio>; mode: PortfolioMode; liveStatus: LiveStatus; liveError: string; onConnect: () => void; onUseMock: () => void }) {
   const colorMap: Record<string, string> = { USDC: 'mint', BTC: 'amber', ETH: 'blue', SOL: 'coral', BNB: 'yellow' }
+  const colorFor = (symbol: string) => colorMap[symbol] ?? 'blue'
+  const emptyLive = mode === 'live' && liveStatus === 'empty'
   return <section className="portfolio section-wrap">
-    <div className="section-kicker"><div><span className="eyebrow">02 / PORTFOLIO SNAPSHOT</span><h2>A clear view of what you hold.</h2></div><div className="data-stamp"><span><Database size={13} /> Mock fixture</span><span><Clock3 size={13} /> {fixtureTimestamp}</span></div></div>
+    <div className="section-kicker"><div><span className="eyebrow">02 / PORTFOLIO SNAPSHOT</span><h2>A clear view of what you hold.</h2></div><div className="data-stamp"><span><Database size={13} /> {mode === 'live' ? 'Binance Agent OS · Spot' : 'Mock fixture'}</span><span><Clock3 size={13} /> {mode === 'live' && liveStatus === 'ready' ? 'Live data' : fixtureTimestamp}</span></div></div>
     <div className="portfolio-head">
-      <div><span className="micro-label">TOTAL VALUE</span><strong>{money.format(portfolio.totalUsd)}</strong><span className="portfolio-up"><ArrowUpRight size={13} /> +2.14% <small>this session</small></span></div>
-      <div className="allocation-summary"><div className="micro-label">ALLOCATION MAP <span>5 assets</span></div><div className="allocation-bar">{portfolio.assets.map((asset) => <i className={`fill-${colorMap[asset.symbol]}`} style={{ width: `${asset.allocationPct}%` }} key={asset.symbol} />)}</div><div className="allocation-legend">{portfolio.assets.map((asset) => <span key={asset.symbol}><i className={`dot-${colorMap[asset.symbol]}`} />{asset.symbol} <b>{pct(asset.allocationPct)}</b></span>)}</div></div>
+      <div><span className="micro-label">TOTAL VALUE</span><strong>{money.format(portfolio.totalUsd)}</strong><span className="portfolio-up"><ArrowUpRight size={13} /> {mode === 'live' ? 'Live' : '+2.14%'} <small>{mode === 'live' ? 'Agent OS' : 'this session'}</small></span></div>
+      <div className="allocation-summary"><div className="micro-label">ALLOCATION MAP <span>{portfolio.assets.length} assets</span></div><div className="allocation-bar">{portfolio.assets.map((asset) => <i className={`fill-${colorFor(asset.symbol)}`} style={{ width: `${asset.allocationPct}%` }} key={asset.symbol} />)}</div><div className="allocation-legend">{portfolio.assets.map((asset) => <span key={asset.symbol}><i className={`dot-${colorFor(asset.symbol)}`} />{asset.symbol} <b>{pct(asset.allocationPct)}</b></span>)}</div></div>
     </div>
-    <div className="asset-grid">{portfolio.assets.map((asset) => <article className="asset-card" key={asset.symbol}><div className={`asset-accent accent-${colorMap[asset.symbol]}`} /><div className="asset-card-top"><span className={`asset-token token-${colorMap[asset.symbol]}`}>{asset.symbol === 'USDC' ? '$' : asset.symbol.slice(0, 1)}</span><span className="asset-change">{asset.change24h >= 0 ? '+' : ''}{asset.change24h.toFixed(2)}%</span></div><div className="asset-symbol">{asset.symbol}</div><div className="asset-name">{asset.name}</div><div className="asset-card-bottom"><strong>{money.format(asset.valueUsd)}</strong><span>{pct(asset.allocationPct)}</span></div><small>{asset.quantity < 1 ? asset.quantity.toFixed(4) : asset.quantity.toFixed(2)} {asset.symbol} · {moneyPrecise.format(asset.priceUsd)}</small></article>)}</div>
+    {emptyLive ? <div className="portfolio-empty"><Database size={19} /><div><strong>No non-zero Spot balances found.</strong><p>Binance Agent OS is connected, but this Agentic Spot account has nothing to value yet.</p></div><button className="secondary-cta" type="button" onClick={onUseMock}>Use Mock Mode</button></div> : mode === 'live' && liveError ? <div className="portfolio-empty is-error"><CircleAlert size={19} /><div><strong>Live portfolio unavailable.</strong><p>{liveError}</p></div><button className="secondary-cta" type="button" onClick={onConnect}>Retry Live Data</button></div> : <div className="asset-grid">{portfolio.assets.map((asset) => <article className="asset-card" key={asset.symbol}><div className={`asset-accent accent-${colorFor(asset.symbol)}`} /><div className="asset-card-top"><span className={`asset-token token-${colorFor(asset.symbol)}`}>{asset.symbol === 'USDC' ? '$' : asset.symbol.slice(0, 1)}</span><span className="asset-change">{asset.change24h >= 0 ? '+' : ''}{asset.change24h.toFixed(2)}%</span></div><div className="asset-symbol">{asset.symbol}</div><div className="asset-name">{asset.name}</div><div className="asset-card-bottom"><strong>{money.format(asset.valueUsd)}</strong><span>{pct(asset.allocationPct)}</span></div><small>{asset.quantity < 1 ? asset.quantity.toFixed(4) : asset.quantity.toFixed(2)} {asset.symbol} · {moneyPrecise.format(asset.priceUsd)}</small></article>)}</div>}
   </section>
 }
 
-function AnalysisPage({ policy, results, previewResults, plan, onApprove, onBack }: { policy: Policy; results: RuleResult[]; previewResults: RuleResult[]; plan: Plan; onApprove: () => void; onBack: () => void }) {
+function AnalysisPage({ policy, results, previewResults, plan, mode, onApprove, onBack }: { policy: Policy; results: RuleResult[]; previewResults: RuleResult[]; plan: Plan; mode: PortfolioMode; onApprove: () => void; onBack: () => void }) {
   const attentionCount = results.filter((result) => !result.passed).length
   const totalActionValue = plan.actions.reduce((sum, action) => sum + action.amountUsd, 0)
   const orderedResults = [...results].sort((a, b) => {
@@ -252,7 +315,7 @@ function AnalysisPage({ policy, results, previewResults, plan, onApprove, onBack
     return order[a.rule.kind] - order[b.rule.kind]
   })
   return <section className="analysis section-wrap">
-    <div className="analysis-top"><div><div className="eyebrow"><span className="eyebrow-signal" /> 02 / POLICY REVIEW</div><h1>{attentionCount} rules need attention<span className="title-period">.</span></h1><p>Rokai translated your policy and checked it against the mock portfolio.</p></div><div className="review-meta"><span className="review-pill"><span /> {results.length - attentionCount} satisfied</span><span className="review-time">Checked just now · fixture prices</span></div></div>
+    <div className="analysis-top"><div><div className="eyebrow"><span className="eyebrow-signal" /> 02 / POLICY REVIEW</div><h1>{attentionCount} rules need attention<span className="title-period">.</span></h1><p>Rokai translated your policy and checked it against {mode === 'live' ? 'live Binance Agent OS Spot data.' : 'the mock portfolio.'}</p></div><div className="review-meta"><span className="review-pill"><span /> {results.length - attentionCount} satisfied</span><span className="review-time">Checked just now · {mode === 'live' ? 'live prices' : 'fixture prices'}</span></div></div>
     <div className="rule-stack">{orderedResults.map((result, index) => <RuleReviewCard key={`${result.rule.kind}-${index}`} result={result} />)}</div>
     <section className="plan-section">
       <div className="plan-heading"><div><div className="eyebrow">03 / ROKAI’S PLAN</div><h2>The smallest compliant move.</h2></div><span className="plan-ready"><i /> READY FOR REVIEW</span></div>
@@ -262,7 +325,7 @@ function AnalysisPage({ policy, results, previewResults, plan, onApprove, onBack
           {plan.actions.length > 0 && <div className="conversion-list">{plan.actions.map((action) => <div className="conversion-row" key={`${action.source}-${action.target}-${action.amountUsd}`}><div className="conversion-route"><span className={`asset-token token-${action.source.toLowerCase()}`}>{action.source.slice(0, 1)}</span><ArrowRight size={14} /><span className={`asset-token token-${action.target.toLowerCase()}`}>{action.target.slice(0, 1)}</span></div><div><b>{action.source} <span>→</span> {action.target}</b><small>{action.rationale}</small></div><strong>{moneyPrecise.format(action.amountUsd)}</strong></div>)}</div>}
           <BeforeAfter results={orderedResults} previewResults={previewResults} />
         </div>
-        <aside className="approval-card"><div className="agent-mark"><span><Command size={18} /></span><div><b>Binance Agent OS</b><small>Mock execution adapter</small></div></div><div className="approval-rule" /><div className="approval-copy"><span className="micro-label">APPROVAL GATE</span><p>Review the exact conversions before anything is simulated.</p></div><button className="agent-cta" type="button" onClick={onApprove} disabled={!plan.safe || !plan.actions.length}>Enforce with Agent OS <ArrowUpRight size={16} /></button><div className="nothing-changes"><LockKeyhole size={13} /> Nothing changes without your approval.</div></aside>
+        <aside className="approval-card"><div className="agent-mark"><span><Command size={18} /></span><div><b>Binance Agent OS</b><small>{mode === 'live' ? 'Read-only Spot data' : 'Mock execution adapter'}</small></div></div><div className="approval-rule" /><div className="approval-copy"><span className="micro-label">{mode === 'live' ? 'READ-ONLY MODE' : 'APPROVAL GATE'}</span><p>{mode === 'live' ? 'Live balances are connected for analysis only. Execution is disabled in Phase 3.' : 'Review the exact conversions before anything is simulated.'}</p></div><button className="agent-cta" type="button" onClick={onApprove} disabled={mode === 'live' || !plan.safe || !plan.actions.length}>{mode === 'live' ? 'Execution disabled' : 'Enforce with Agent OS'} {mode !== 'live' && <ArrowUpRight size={16} />}</button><div className="nothing-changes"><LockKeyhole size={13} /> {mode === 'live' ? 'No account changes are available in Phase 3.' : 'Nothing changes without your approval.'}</div></aside>
       </div>
       {plan.warnings.map((warning) => <div className="plan-warning" key={warning}><CircleAlert size={15} /> {warning}</div>)}
       <div className="plan-foot"><span><Check size={14} /> One reviewed plan satisfies all {policy.rules.length} active rules.</span><button className="back-link" type="button" onClick={onBack}>Edit policy <ArrowRight size={14} /></button></div>

@@ -60,6 +60,10 @@ UI (one page)
 
 Recommended stack: Next.js/React, TypeScript, Tailwind CSS, and the existing Binance Agent OS/MCP integration. Use a small schema validator only if already available or clearly useful. Keep provider-specific calls out of UI components.
 
+### Phase 3 live-data boundary
+
+Phase 3 is read-only. The server-side Binance Agent OS/MCP adapter may call only `spot.getAccount` for the Agentic Spot account and `spot.tickerPrice` for the required `ASSETUSDT` pairs. It normalizes those responses into the existing `Asset` shape before the deterministic rule engine runs. No Futures, Margin, order, convert, transfer, or account-mutating tool is available through this adapter.
+
 ## Rule schema
 
 ```ts
@@ -99,6 +103,8 @@ The planner should prefer the fewest Spot/Convert actions needed to restore the 
 
 **Live Mode** is opt-in. Require Binance connection, visible mode labeling, permission checks, fresh balances/prices, an explicit approval for the exact plan, and a final confirmation immediately before account-changing calls. Use the Agentic sub-account when configured. Never expose secrets to the browser or infer permission to trade.
 
+For Phase 3, Live Mode is read-only and uses Agentic Spot balances and live prices through the server-side Binance MCP adapter. Phase 3.5 connects that adapter directly to Binance's official Streamable HTTP endpoint (`https://agent.binance.com/mcp/agentic`) using the official MCP TypeScript client. `BINANCE_AGENT_OS_MCP_URL` may override the endpoint for testing, but a custom bridge is not required. Binance authorization uses OAuth authorization code + PKCE and Client ID Metadata Documents; the metadata document and callback must be hosted at the public HTTPS Rokai origin configured by `ROKAI_PUBLIC_URL`. Tokens, PKCE state, and session data remain server-side in an httpOnly session. If no OAuth session exists, Rokai starts authorization rather than attempting unauthenticated account access. Zero balances are shown as an empty state; any non-stablecoin without a resolved live USDT price fails safely instead of being valued implicitly.
+
 ## Edge cases and safety
 
 Handle visibly: empty or zero-value portfolios, missing/stale prices, unknown symbols, unsupported rule language, duplicate rules, percentages outside 0–100, insufficient balance, exchange filters, fees/slippage, protected assets blocking a plan, partial fills, rejected orders, timeouts, expired approval, revoked permissions, and failed post-execution refresh.
@@ -122,5 +128,6 @@ Fail closed: parsing uncertainty, stale data, missing permissions, or any mismat
 4. **Evaluation:** deterministic rule engine, violations, tests, portfolio snapshot.
 5. **Planning:** deterministic compliant plan, estimates, warnings, approval UI.
 6. **Binance:** Agent OS/MCP read adapters, permissions, live data, Agentic sub-account configuration.
-7. **Execution:** mock simulation, then explicitly enabled Spot/Convert live path and verification.
-8. **Demo hardening:** polish, error handling, build/deploy verification, and the 30-second demo checklist.
+7. **Phase 3.5 — Direct MCP connectivity:** connect the server-side adapter directly to Binance's official MCP endpoint with OAuth/PKCE; keep the integration read-only and server-side.
+8. **Execution:** mock simulation, then explicitly enabled Spot/Convert live path and verification.
+9. **Demo hardening:** polish, error handling, build/deploy verification, and the 30-second demo checklist.
