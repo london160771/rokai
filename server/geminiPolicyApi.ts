@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Plugin } from 'vite'
-import { normalizeStructuredPolicy, type StructuredPolicy } from '../src/policyParser'
+import { normalizeStructuredPolicy, type StructuredPolicy } from '../src/policyParser.js'
 
 const DEFAULT_MODEL = 'gemini-3.7-flash'
 const MAX_POLICY_LENGTH = 4000

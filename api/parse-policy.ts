@@ -1,8 +1,8 @@
-import { parseWithGemini } from '../server/geminiPolicyApi'
+import { parseWithGemini } from '../server/geminiPolicyApi.js'
 
 const maxPolicyLength = 4000
 
-export default async function handler(request: Request): Promise<Response> {
+export async function fetch(request: Request): Promise<Response> {
   if (request.method !== 'POST') return Response.json({ error: 'Only POST is supported.' }, { status: 405 })
   let body: { text?: unknown }
   try {

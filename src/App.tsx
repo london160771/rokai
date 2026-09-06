@@ -18,7 +18,7 @@ import {
   WalletCards,
   X,
 } from 'lucide-react'
-import { cloneMockAssets, DEMO_POLICY_TEXT, fixtureTimestamp, type Asset } from './mockData'
+import { cloneMockAssets, DEMO_POLICY_TEXT, fixtureTimestamp, type Asset } from './mockData.js'
 import {
   applyPlan,
   buildPlan,
@@ -28,8 +28,8 @@ import {
   type Plan,
   type Policy,
   type RuleResult,
-} from './rules'
-import { readApiJson, requestPolicyParse } from './policyParser'
+} from './rules.js'
+import { readApiJson, requestPolicyParse } from './policyParser.js'
 
 type Route = '/' | '/analysis' | '/result'
 type FlowState = 'idle' | 'checked' | 'approved' | 'verified'

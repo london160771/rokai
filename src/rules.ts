@@ -1,4 +1,4 @@
-import type { Asset } from './mockData'
+import type { Asset } from './mockData.js'
 
 export type Rule =
   | { kind: 'min_stablecoin'; asset: string; minPct: number }

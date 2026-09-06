@@ -1,5 +1,5 @@
-import { handleVercelBinanceApi } from '../../../server/vercelBinanceApi'
+import { handleVercelBinanceApi } from '../../../server/vercelBinanceApi.js'
 
-export default function handler(request: Request): Promise<Response> {
+export function fetch(request: Request): Promise<Response> {
   return handleVercelBinanceApi('auth-start', request)
 }

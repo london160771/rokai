@@ -1,4 +1,4 @@
-import type { Policy, Rule } from './rules'
+import type { Policy, Rule } from './rules.js'
 
 export type StructuredPolicy = {
   minStablecoinPercent?: number
@@ -189,7 +189,7 @@ export async function requestPolicyParse(sourceText: string): Promise<PolicyPars
       body: JSON.stringify({ text: sourceText }),
     })
     const result = await readApiJson<{ structured?: unknown }>(response, 'Gemini could not parse that policy.')
-    if (!result.ok) return { policy: null, source: 'none', error: result.error }
+    if (result.ok === false) return { policy: null, source: 'none', error: result.error }
 
     const normalized = normalizeStructuredPolicy(result.payload.structured, sourceText)
     return normalized.policy
