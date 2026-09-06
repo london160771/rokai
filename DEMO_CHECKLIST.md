@@ -22,6 +22,7 @@ Use Mock Mode unless live execution has been explicitly approved and rehearsed.
 - Browser is sized to show the full one-page flow without scrolling surprises.
 - No real API keys, real account identifiers, or sensitive balances are visible.
 - If testing Phase 3/3.5, `BINANCE_AGENT_OS_MCP_URL` points to Binance's official MCP endpoint (the default), `ROKAI_PUBLIC_URL` is a public HTTPS origin, and the browser completes Binance OAuth; the browser never receives tokens or credentials.
+- For Vercel, configure `ROKAI_SESSION_SECRET` as a server-only random value of at least 32 characters; do not put it in a `VITE_` variable.
 
 ## Supported MVP policy rules
 

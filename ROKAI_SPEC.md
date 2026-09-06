@@ -131,3 +131,9 @@ Fail closed: parsing uncertainty, stale data, missing permissions, or any mismat
 7. **Phase 3.5 — Direct MCP connectivity:** connect the server-side adapter directly to Binance's official MCP endpoint with OAuth/PKCE; keep the integration read-only and server-side.
 8. **Execution:** mock simulation, then explicitly enabled Spot/Convert live path and verification.
 9. **Demo hardening:** polish, error handling, build/deploy verification, and the 30-second demo checklist.
+
+## Vercel deployment
+
+The Vite frontend builds to `dist`. Vercel Functions under `api/` provide the same-origin Gemini and Binance endpoints, so the deployed shape is one project: `/`, `/analysis`, and `/result` serve the SPA, while `/api/...` runs server-side Node functions. `vercel.json` keeps the two client-side routes deep-linkable without rewriting API requests.
+
+Vercel Functions are stateless between invocations. The Binance OAuth state and tokens are stored in an encrypted, httpOnly, Secure cookie sealed with the server-only `ROKAI_SESSION_SECRET`; no plaintext token or OAuth state is available to frontend JavaScript. This is intentionally a single-project, no-database hackathon approach. Sessions are invalidated when the secret changes, and a future multi-instance production deployment should use a managed encrypted session store if cookie size or centralized revocation becomes a requirement.
