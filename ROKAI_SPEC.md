@@ -13,6 +13,8 @@ Users state what must remain true in plain English. Rokai parses the request, ch
 Included:
 
 - Minimum stablecoin allocation.
+- Minimum fixed stablecoin amount.
+- Minimum asset allocation.
 - Protected assets: never sell.
 - Maximum asset exposure.
 - Binance Agent OS/MCP for real balances, live market data, permissions, Spot/Convert execution, and an Agentic sub-account.
@@ -68,6 +70,8 @@ type Policy = {
 
 type Rule =
   | { kind: "min_stablecoin"; asset: string; minPct: number }
+  | { kind: "min_stablecoin_amount"; asset: string; minAmount: number }
+  | { kind: "min_asset_allocation"; asset: string; minPct: number }
   | { kind: "protected_asset"; asset: string }
   | { kind: "max_asset_exposure"; asset: string | "altcoins"; maxPct: number };
 ```
@@ -80,6 +84,8 @@ Parsing must normalize symbols, percentages, and synonyms, return confidence/err
 - `portfolioValue = sum(asset quantity × reference price)`.
 - `allocationPct = asset value / portfolioValue × 100`.
 - Stablecoin rule passes when the named stablecoin allocation is at least `minPct`.
+- Fixed stablecoin amount rule passes when the named stablecoin value is at least `minAmount`.
+- Minimum asset allocation rule passes when the named asset allocation is at least `minPct`.
 - Protected-asset rule passes when no plan sells that asset.
 - Maximum-exposure rule passes when the relevant asset or altcoin allocation is at most `maxPct`.
 - Planning must respect protected assets, available balances, exchange filters, minimum notional/quantity, fees, and configurable slippage tolerance.
@@ -102,7 +108,7 @@ Fail closed: parsing uncertainty, stale data, missing permissions, or any mismat
 ## Acceptance criteria
 
 - A judge can understand the product and current mode within five seconds.
-- The natural-language example produces the three structured MVP rules.
+- The natural-language example and the supported fixtures produce the five structured MVP rules.
 - Mock Mode checks rules, identifies violations, creates an explainable plan, simulates approval/execution, and verifies compliance.
 - Calculations and trade sizing are deterministic and testable without Gemini or Binance.
 - Live integration is isolated, permission-aware, approval-gated, and never the default.
@@ -112,8 +118,9 @@ Fail closed: parsing uncertainty, stale data, missing permissions, or any mismat
 
 1. **Foundation:** app shell, dark visual system, mode state, mock portfolio, fixture prices.
 2. **Policy:** Gemini parsing adapter, schema, parsing fixtures, rule review UI.
-3. **Evaluation:** deterministic rule engine, violations, tests, portfolio snapshot.
-4. **Planning:** deterministic compliant plan, estimates, warnings, approval UI.
-5. **Binance:** Agent OS/MCP read adapters, permissions, live data, Agentic sub-account configuration.
-6. **Execution:** mock simulation, then explicitly enabled Spot/Convert live path and verification.
-7. **Demo hardening:** polish, error handling, build/deploy verification, and the 30-second demo checklist.
+3. **Phase 2.5 — Rule coverage:** add minimum fixed stablecoin amount and minimum asset allocation parsing, validation, deterministic evaluation, planning, and display. Phase 3 starts only after this phase is reviewed and approved.
+4. **Evaluation:** deterministic rule engine, violations, tests, portfolio snapshot.
+5. **Planning:** deterministic compliant plan, estimates, warnings, approval UI.
+6. **Binance:** Agent OS/MCP read adapters, permissions, live data, Agentic sub-account configuration.
+7. **Execution:** mock simulation, then explicitly enabled Spot/Convert live path and verification.
+8. **Demo hardening:** polish, error handling, build/deploy verification, and the 30-second demo checklist.

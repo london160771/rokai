@@ -47,6 +47,8 @@ function pct(value: number) { return `${value.toFixed(1)}%` }
 
 function ruleTitle(result: RuleResult) {
   if (result.rule.kind === 'min_stablecoin') return `${result.rule.asset} Reserve`
+  if (result.rule.kind === 'min_stablecoin_amount') return `${result.rule.asset} Cash Reserve`
+  if (result.rule.kind === 'min_asset_allocation') return `${result.rule.asset} Allocation`
   if (result.rule.kind === 'protected_asset') return `${result.rule.asset} Protection`
   const symbol = result.detail.match(/^([A-Z0-9]+)/)?.[1] ?? 'Altcoin'
   return `${symbol} Exposure`
@@ -54,8 +56,26 @@ function ruleTitle(result: RuleResult) {
 
 function ruleTarget(result: RuleResult) {
   if (result.rule.kind === 'min_stablecoin') return `${pct(result.targetPct)} minimum`
+  if (result.rule.kind === 'min_stablecoin_amount') return `${moneyPrecise.format(result.targetAmountUsd ?? result.rule.minAmount)} minimum`
+  if (result.rule.kind === 'min_asset_allocation') return `${pct(result.targetPct)} minimum`
   if (result.rule.kind === 'protected_asset') return 'Protected'
   return `${pct(result.targetPct)} maximum`
+}
+
+function ruleCurrentValue(result: RuleResult) {
+  if (result.rule.kind === 'min_stablecoin_amount') return moneyPrecise.format(result.currentAmountUsd ?? 0)
+  if (result.rule.kind === 'protected_asset') return 'Protected'
+  return pct(result.currentPct ?? 0)
+}
+
+function ruleAfterValue(result: RuleResult) {
+  if (result.rule.kind === 'min_stablecoin_amount') return moneyPrecise.format(result.targetAmountUsd ?? result.rule.minAmount)
+  if (result.rule.kind === 'protected_asset') return 'Untouched'
+  return pct(result.targetPct)
+}
+
+function ruleIndex(result: RuleResult) {
+  return ({ min_stablecoin: 1, min_stablecoin_amount: 2, min_asset_allocation: 3, max_asset_exposure: 4, protected_asset: 5 } as const)[result.rule.kind]
 }
 
 function App() {
@@ -228,7 +248,7 @@ function AnalysisPage({ policy, results, previewResults, plan, onApprove, onBack
   const attentionCount = results.filter((result) => !result.passed).length
   const totalActionValue = plan.actions.reduce((sum, action) => sum + action.amountUsd, 0)
   const orderedResults = [...results].sort((a, b) => {
-    const order = { min_stablecoin: 0, max_asset_exposure: 1, protected_asset: 2 }
+    const order = { min_stablecoin: 0, min_stablecoin_amount: 1, min_asset_allocation: 2, max_asset_exposure: 3, protected_asset: 4 }
     return order[a.rule.kind] - order[b.rule.kind]
   })
   return <section className="analysis section-wrap">
@@ -238,8 +258,8 @@ function AnalysisPage({ policy, results, previewResults, plan, onApprove, onBack
       <div className="plan-heading"><div><div className="eyebrow">03 / ROKAI’S PLAN</div><h2>The smallest compliant move.</h2></div><span className="plan-ready"><i /> READY FOR REVIEW</span></div>
       <div className="plan-layout">
         <div className="plan-main">
-          <div className="plan-callout"><div className="plan-icon"><WalletCards size={22} /></div><div><span className="micro-label">RECOMMENDED ACTION</span><h3>{plan.safe && plan.actions.length ? `Sell ${moneyPrecise.format(totalActionValue)} into USDC` : 'Unable to plan safely'}</h3><p>{plan.safe && plan.actions.length ? `${plan.actions.length} conversion${plan.actions.length === 1 ? '' : 's'} restore all active constraints without touching protected assets.` : 'Rokai will not propose an incomplete or unsafe action.'}</p></div></div>
-          {plan.actions.length > 0 && <div className="conversion-list">{plan.actions.map((action) => <div className="conversion-row" key={`${action.source}-${action.amountUsd}`}><div className="conversion-route"><span className={`asset-token token-${action.source.toLowerCase()}`}>{action.source.slice(0, 1)}</span><ArrowRight size={14} /><span className="asset-token token-mint">$</span></div><div><b>{action.source} <span>→</span> USDC</b><small>{action.rationale}</small></div><strong>{moneyPrecise.format(action.amountUsd)}</strong></div>)}</div>}
+          <div className="plan-callout"><div className="plan-icon"><WalletCards size={22} /></div><div><span className="micro-label">RECOMMENDED ACTION</span><h3>{plan.safe && plan.actions.length ? `Sell ${moneyPrecise.format(totalActionValue)}${[...new Set(plan.actions.map((action) => action.target))].length === 1 ? ` into ${plan.actions[0].target}` : ' across policy targets'}` : 'Unable to plan safely'}</h3><p>{plan.safe && plan.actions.length ? `${plan.actions.length} conversion${plan.actions.length === 1 ? '' : 's'} restore all active constraints without touching protected assets.` : 'Rokai will not propose an incomplete or unsafe action.'}</p></div></div>
+          {plan.actions.length > 0 && <div className="conversion-list">{plan.actions.map((action) => <div className="conversion-row" key={`${action.source}-${action.target}-${action.amountUsd}`}><div className="conversion-route"><span className={`asset-token token-${action.source.toLowerCase()}`}>{action.source.slice(0, 1)}</span><ArrowRight size={14} /><span className={`asset-token token-${action.target.toLowerCase()}`}>{action.target.slice(0, 1)}</span></div><div><b>{action.source} <span>→</span> {action.target}</b><small>{action.rationale}</small></div><strong>{moneyPrecise.format(action.amountUsd)}</strong></div>)}</div>}
           <BeforeAfter results={orderedResults} previewResults={previewResults} />
         </div>
         <aside className="approval-card"><div className="agent-mark"><span><Command size={18} /></span><div><b>Binance Agent OS</b><small>Mock execution adapter</small></div></div><div className="approval-rule" /><div className="approval-copy"><span className="micro-label">APPROVAL GATE</span><p>Review the exact conversions before anything is simulated.</p></div><button className="agent-cta" type="button" onClick={onApprove} disabled={!plan.safe || !plan.actions.length}>Enforce with Agent OS <ArrowUpRight size={16} /></button><div className="nothing-changes"><LockKeyhole size={13} /> Nothing changes without your approval.</div></aside>
@@ -252,12 +272,12 @@ function AnalysisPage({ policy, results, previewResults, plan, onApprove, onBack
 
 function RuleReviewCard({ result }: { result: RuleResult }) {
   const isProtected = result.rule.kind === 'protected_asset'
-  return <article className={`rule-review-card ${result.passed ? 'passed' : 'attention'}`}><div className="rule-card-index">{`0${result.rule.kind === 'min_stablecoin' ? 1 : result.rule.kind === 'protected_asset' ? 3 : 2}`}</div><div className="rule-card-main"><div className="rule-card-heading"><h2>{ruleTitle(result)}</h2><span className={`status-tag ${result.passed ? 'status-pass' : 'status-attention'}`}>{result.passed ? <CircleCheck size={14} /> : <CircleAlert size={14} />} {result.passed ? 'Satisfied' : 'Needs attention'}</span></div><p>{result.detail}</p></div><div className="rule-number"><span>{isProtected ? 'Protected' : pct(result.currentPct ?? 0)}</span><small>{isProtected ? 'BTC untouched' : ruleTarget(result)}</small></div><div className="rule-arrow">{result.passed ? <Check size={17} /> : <ArrowDownRight size={17} />}</div></article>
+  return <article className={`rule-review-card ${result.passed ? 'passed' : 'attention'}`}><div className="rule-card-index">{`0${ruleIndex(result)}`}</div><div className="rule-card-main"><div className="rule-card-heading"><h2>{ruleTitle(result)}</h2><span className={`status-tag ${result.passed ? 'status-pass' : 'status-attention'}`}>{result.passed ? <CircleCheck size={14} /> : <CircleAlert size={14} />} {result.passed ? 'Satisfied' : 'Needs attention'}</span></div><p>{result.detail}</p></div><div className="rule-number"><span>{ruleCurrentValue(result)}</span><small>{isProtected ? 'BTC untouched' : ruleTarget(result)}</small></div><div className="rule-arrow">{result.passed ? <Check size={17} /> : <ArrowDownRight size={17} />}</div></article>
 }
 
 function BeforeAfter({ results, previewResults }: { results: RuleResult[]; previewResults: RuleResult[] }) {
   const comparison = results.filter((result) => result.rule.kind !== 'protected_asset')
-  return <div className="before-after"><div className="before-after-head"><span className="micro-label">COMPLIANCE PREVIEW</span><span><i /> protected assets stay untouched</span></div><div className="comparison-grid"><div className="comparison-column"><span className="comparison-label">BEFORE</span>{comparison.map((result) => <div className="comparison-value" key={result.rule.kind}><b>{ruleTitle(result).replace(' Reserve', '').replace(' Exposure', '')}</b><strong>{pct(result.currentPct ?? 0)}</strong></div>)}</div><div className="comparison-divider"><ArrowRight size={17} /></div><div className="comparison-column after"><span className="comparison-label">AFTER SIMULATION</span>{comparison.map((result) => { const after = previewResults.find((item) => item.rule.kind === result.rule.kind); return <div className="comparison-value" key={result.rule.kind}><b>{ruleTitle(result).replace(' Reserve', '').replace(' Exposure', '')}</b><strong>{pct(after?.currentPct ?? 0)} <Check size={13} /></strong></div> })}</div></div><div className="untouched"><LockKeyhole size={13} /> BTC untouched · no protected asset is included in the plan</div></div>
+  return <div className="before-after"><div className="before-after-head"><span className="micro-label">COMPLIANCE PREVIEW</span><span><i /> protected assets stay untouched</span></div><div className="comparison-grid"><div className="comparison-column"><span className="comparison-label">BEFORE</span>{comparison.map((result) => <div className="comparison-value" key={result.rule.kind}><b>{ruleTitle(result).replace(' Reserve', '').replace(' Exposure', '')}</b><strong>{ruleCurrentValue(result)}</strong></div>)}</div><div className="comparison-divider"><ArrowRight size={17} /></div><div className="comparison-column after"><span className="comparison-label">AFTER SIMULATION</span>{comparison.map((result) => { const after = previewResults.find((item) => item.rule.kind === result.rule.kind); return <div className="comparison-value" key={result.rule.kind}><b>{ruleTitle(result).replace(' Reserve', '').replace(' Exposure', '')}</b><strong>{after ? ruleAfterValue(after) : ruleTarget(result)} <Check size={13} /></strong></div> })}</div></div><div className="untouched"><LockKeyhole size={13} /> BTC untouched · no protected asset is included in the plan</div></div>
 }
 
 function ResultPage({ plan, results, onComplete, onReset, onViewPortfolio }: { plan: Plan; results: RuleResult[]; onComplete: () => void; onReset: () => void; onViewPortfolio: () => void }) {
@@ -273,10 +293,10 @@ function ResultPage({ plan, results, onComplete, onReset, onViewPortfolio }: { p
 
   if (!complete) return <section className="execution section-wrap"><div className="execution-intro"><div className="eyebrow"><RefreshCw className="spin" size={13} /> 03 / MOCK EXECUTION</div><h1>Keeping your rules<br /><em>in the loop.</em></h1><p>Rokai is moving through the approval-gated sequence. No live account is connected.</p></div><div className="execution-card">{stages.map((stage, index) => <div className={`execution-step ${index < completedCount ? 'done' : index === completedCount ? 'current' : ''}`} key={stage}><span className="step-mark">{index < completedCount ? <Check size={15} /> : index === completedCount ? <RefreshCw className="spin" size={14} /> : <i />}</span><div><b>{stage}</b><small>{index < completedCount ? 'Complete' : index === completedCount ? 'In progress' : 'Queued'}</small></div><span className="step-line" /></div>)}<div className="mock-execution-note"><span><Command size={15} /> Binance Agent OS</span><span>Mock Mode · simulated only</span></div></div></section>
 
-  const stableResult = results.find((result) => result.rule.kind === 'min_stablecoin')
+  const stableResult = results.find((result) => result.rule.kind === 'min_stablecoin' || result.rule.kind === 'min_stablecoin_amount')
   const maxResult = results.find((result) => result.rule.kind === 'max_asset_exposure')
   const protectedResult = results.find((result) => result.rule.kind === 'protected_asset')
-  return <section className="success section-wrap"><div className="success-eyebrow"><span className="success-seal"><CircleCheck size={19} /></span><span>VERIFIED · MOCK MODE</span></div><h1>Rules <em>restored.</em></h1><p className="success-copy">Your portfolio now satisfies all active rules.</p><div className="verified-grid"><div><span>USDC reserve</span><strong>{pct(stableResult?.currentPct ?? 0)} <Check size={17} /></strong></div><div><span>{maxResult ? ruleTitle(maxResult) : 'Altcoin exposure'}</span><strong>{pct(maxResult?.currentPct ?? 0)} <Check size={17} /></strong></div><div><span>BTC protection</span><strong>{protectedResult?.passed ? 'Untouched' : 'Review'} <Check size={17} /></strong></div></div><div className="success-meta"><span><Check size={14} /> Balances refreshed</span><span><Check size={14} /> Policy rechecked</span><span><Clock3 size={14} /> Just now · mock fixture</span></div><div className="success-actions"><button className="primary-cta" type="button" onClick={onReset}>Set New Rules <ArrowUpRight size={17} /></button><button className="secondary-cta" type="button" onClick={onViewPortfolio}>View Portfolio <ArrowRight size={16} /></button></div></section>
+  return <section className="success section-wrap"><div className="success-eyebrow"><span className="success-seal"><CircleCheck size={19} /></span><span>VERIFIED · MOCK MODE</span></div><h1>Rules <em>restored.</em></h1><p className="success-copy">Your portfolio now satisfies all active rules.</p><div className="verified-grid"><div><span>{stableResult?.rule.asset ?? 'USDC'} reserve</span><strong>{stableResult?.rule.kind === 'min_stablecoin_amount' ? moneyPrecise.format(stableResult.currentAmountUsd ?? 0) : pct(stableResult?.currentPct ?? 0)} <Check size={17} /></strong></div><div><span>{maxResult ? ruleTitle(maxResult) : 'Altcoin exposure'}</span><strong>{pct(maxResult?.currentPct ?? 0)} <Check size={17} /></strong></div><div><span>BTC protection</span><strong>{protectedResult?.passed ? 'Untouched' : 'Review'} <Check size={17} /></strong></div></div><div className="success-meta"><span><Check size={14} /> Balances refreshed</span><span><Check size={14} /> Policy rechecked</span><span><Clock3 size={14} /> Just now · mock fixture</span></div><div className="success-actions"><button className="primary-cta" type="button" onClick={onReset}>Set New Rules <ArrowUpRight size={17} /></button><button className="secondary-cta" type="button" onClick={onViewPortfolio}>View Portfolio <ArrowRight size={16} /></button></div></section>
 }
 
 function AnalysisTransition() {

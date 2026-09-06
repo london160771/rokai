@@ -24,11 +24,13 @@ Rokai turns natural-language portfolio rules into a reviewable policy, checks a 
 ## Required implementation sequence
 
 1. Build the one-page dark command-center UI with mock balances and real/public prices where available.
-2. Add deterministic parsing fixtures and the three MVP rule types.
+2. Add deterministic parsing fixtures and the five MVP rule types.
 3. Add rule results and a deterministic action-plan preview.
 4. Add Binance Agent OS/MCP adapters for real balances, market data, permissions, Spot/Convert, and the Agentic sub-account.
 5. Add guarded live execution and post-execution verification only after the mock flow is stable and explicitly reviewed.
 6. Polish the demo path, error states, accessibility, and submission materials.
+
+Phase 2.5 expands the supported policy rules to five; do not begin Phase 3 or Binance Agent OS integration until Phase 2.5 has been reviewed and approved.
 
 ## Definition of done for every phase
 

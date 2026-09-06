@@ -3,6 +3,8 @@ import type { Policy, Rule } from './rules.ts'
 export type StructuredPolicy = {
   minStablecoinPercent?: number
   minStablecoinAsset?: string
+  minStablecoinAmount?: { asset: string; minAmount: number }
+  minAssetAllocation?: { asset: string; minPct: number }
   protectedAssets?: string[]
   maxAssetPercent?: number
   ambiguous?: boolean
@@ -24,6 +26,8 @@ type NormalizedPolicy = {
 const allowedFields = new Set([
   'minStablecoinPercent',
   'minStablecoinAsset',
+  'minStablecoinAmount',
+  'minAssetAllocation',
   'protectedAssets',
   'maxAssetPercent',
   'ambiguous',
@@ -31,6 +35,7 @@ const allowedFields = new Set([
 ])
 
 const symbolPattern = /^[A-Z][A-Z0-9]{1,11}$/
+const stablecoinSymbols = new Set(['USDC', 'USDT', 'BUSD', 'FDUSD', 'DAI', 'USDE'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -38,6 +43,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function validPercent(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100
+}
+
+function validAmount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1_000_000_000
 }
 
 function normalizeSymbol(value: unknown) {
@@ -77,6 +86,34 @@ export function normalizeStructuredPolicy(value: unknown, sourceText: string): N
     return { policy: null, error: 'Gemini returned a stablecoin without a minimum percentage.' }
   }
 
+  let minStablecoinAmount: { asset: string; minAmount: number } | undefined
+  if (value.minStablecoinAmount !== undefined) {
+    if (!isRecord(value.minStablecoinAmount) || Object.keys(value.minStablecoinAmount).some((key) => !['asset', 'minAmount'].includes(key))) {
+      return { policy: null, error: 'Gemini returned an invalid stablecoin amount rule.' }
+    }
+    const asset = normalizeSymbol(value.minStablecoinAmount.asset)
+    if (!asset || !stablecoinSymbols.has(asset)) {
+      return { policy: null, error: 'Gemini returned a malformed stablecoin amount asset.' }
+    }
+    if (!validAmount(value.minStablecoinAmount.minAmount)) {
+      return { policy: null, error: 'Stablecoin minimum amounts must be non-negative and finite.' }
+    }
+    minStablecoinAmount = { asset, minAmount: value.minStablecoinAmount.minAmount }
+  }
+
+  let minAssetAllocation: { asset: string; minPct: number } | undefined
+  if (value.minAssetAllocation !== undefined) {
+    if (!isRecord(value.minAssetAllocation) || Object.keys(value.minAssetAllocation).some((key) => !['asset', 'minPct'].includes(key))) {
+      return { policy: null, error: 'Gemini returned an invalid minimum allocation rule.' }
+    }
+    const asset = normalizeSymbol(value.minAssetAllocation.asset)
+    if (!asset) return { policy: null, error: 'Gemini returned a malformed minimum allocation asset.' }
+    if (!validPercent(value.minAssetAllocation.minPct)) {
+      return { policy: null, error: 'Minimum allocation percentages must be between 0% and 100%.' }
+    }
+    minAssetAllocation = { asset, minPct: value.minAssetAllocation.minPct }
+  }
+
   let protectedAssets: string[] = []
   if (value.protectedAssets !== undefined) {
     if (!Array.isArray(value.protectedAssets) || value.protectedAssets.some((asset) => !normalizeSymbol(asset))) {
@@ -93,6 +130,8 @@ export function normalizeStructuredPolicy(value: unknown, sourceText: string): N
   const rules: Rule[] = []
   const minStablecoinAsset = hasMinAsset ? normalizeSymbol(value.minStablecoinAsset)! : 'USDC'
   if (hasMinPercent) rules.push({ kind: 'min_stablecoin', asset: minStablecoinAsset, minPct: value.minStablecoinPercent as number })
+  if (minStablecoinAmount) rules.push({ kind: 'min_stablecoin_amount', ...minStablecoinAmount })
+  if (minAssetAllocation) rules.push({ kind: 'min_asset_allocation', ...minAssetAllocation })
   protectedAssets.forEach((asset) => rules.push({ kind: 'protected_asset', asset }))
   if (hasMaxPercent) rules.push({ kind: 'max_asset_exposure', asset: 'altcoins', maxPct: value.maxAssetPercent as number })
 
@@ -103,6 +142,8 @@ export function normalizeStructuredPolicy(value: unknown, sourceText: string): N
     structured.minStablecoinPercent = value.minStablecoinPercent as number
     structured.minStablecoinAsset = minStablecoinAsset
   }
+  if (minStablecoinAmount) structured.minStablecoinAmount = minStablecoinAmount
+  if (minAssetAllocation) structured.minAssetAllocation = minAssetAllocation
   if (protectedAssets.length) structured.protectedAssets = protectedAssets
   if (hasMaxPercent) structured.maxAssetPercent = value.maxAssetPercent as number
 

@@ -22,6 +22,18 @@ Use Mock Mode unless live execution has been explicitly approved and rehearsed.
 - Browser is sized to show the full one-page flow without scrolling surprises.
 - No real API keys, real account identifiers, or sensitive balances are visible.
 
+## Supported MVP policy rules
+
+Rokai Phase 2.5 supports these five deterministic rule types:
+
+- Minimum stablecoin allocation: “Keep at least 40% in USDC.”
+- Minimum fixed stablecoin amount: “Always keep at least 1,000 USDC.”
+- Minimum asset allocation: “Keep at least 20% in BTC.”
+- Protected assets: “Never sell BTC.”
+- Maximum asset exposure: “No altcoin above 20%.”
+
+Phase 3 (Binance Agent OS integration) starts only after Phase 2.5 is complete and reviewed.
+
 ## Fallback behavior
 
 If Gemini, price data, Binance Agent OS/MCP, or the network is unavailable:
@@ -47,7 +59,7 @@ If a live demo is attempted, stop on stale data, missing permissions, an unexpec
 
 - [ ] `AGENTS.md`, `ROKAI_SPEC.md`, and this checklist are included.
 - [ ] Mock-first flow is stable without credentials.
-- [ ] Rule engine tests cover all three MVP rules and key edge cases.
+- [ ] Rule engine tests cover all five MVP rules and key edge cases.
 - [ ] Gemini is used only for parsing and has a safe fallback.
 - [ ] Binance Agent OS/MCP integration is isolated behind adapters.
 - [ ] Live mode is opt-in, permission-aware, approval-gated, and disabled by default.
