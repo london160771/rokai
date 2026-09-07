@@ -45,6 +45,61 @@ User
 
 Rokai is designed to run as an Agent OS skill inside a supported host. The website in this repository is a public landing page and visual explainer; it is not the execution interface and does not directly authenticate to Binance.
 
+## How to use Rokai
+
+### 1. Install or clone
+
+```bash
+git clone https://github.com/london160771/rokai.git
+cd rokai
+npm install
+```
+
+### 2. Register the Codex skill
+
+Register the repository's `SKILL.md` in your Codex skills directory. For example, a Windows installation may use:
+
+```text
+C:\Users\<user>\.codex\skills\rokai
+```
+
+The reusable skill is then available by name:
+
+```text
+$rokai
+```
+
+### 3. Connect the supported host
+
+Connect Binance Agent OS / MCP inside Codex or another supported host using Binance's official instructions: <https://developers.binance.com/en/docs/agent-native/mcp-server/agentic>.
+
+### 4. Invoke Rokai and state a policy
+
+Use either the skill invocation or a natural-language request:
+
+```text
+Use Rokai. Keep at least 40% in USDC, never sell BTC, and don’t let any altcoin exceed 20%.
+```
+
+### 5. Review the result
+
+Rokai reads the Agentic Spot account, interprets only the five supported policy rules, evaluates them with deterministic calculations, proposes the smallest reasonable fix, and asks for explicit approval. Execution can happen only after approval and only when a future execution phase is enabled; the current demo is read-only.
+
+## Requirements
+
+- Codex or another supported Binance Agent OS host
+- Binance Agent OS / MCP connection
+- Rokai skill
+- Binance Agentic account
+
+## What happens next
+
+```text
+User Policy → Rokai → Binance Agent OS → Portfolio Check → Proposed Action → User Approval → Execution → Verification
+```
+
+Every step remains visible. The current demo stops before execution and never changes Binance state.
+
 ## Supported rules
 
 1. Minimum stablecoin allocation — “Keep at least 40% in USDC.”

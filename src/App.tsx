@@ -6,6 +6,7 @@ import {
   Eye,
   LockKeyhole,
   Network,
+  Play,
   Scale,
   ShieldCheck,
   Sparkles,
@@ -30,6 +31,24 @@ const workflow = [
   { number: '06', title: 'Execute → Verify', copy: 'After approval, use sanctioned Spot tools, then reread and recalculate everything.' },
 ]
 
+const setupSteps = [
+  { number: '01', title: 'Install / clone', copy: 'Start with the public Rokai repository and install its dependencies.', code: 'git clone https://github.com/london160771/rokai.git\ncd rokai\nnpm install' },
+  { number: '02', title: 'Register the skill', copy: 'Place the approved skill in your Codex skills directory.', code: 'C:\\Users\\<user>\\.codex\\skills\\rokai' },
+  { number: '03', title: 'Connect your host', copy: 'Connect Binance Agent OS / MCP inside Codex or another supported host.', code: 'Binance Agent OS / MCP' },
+  { number: '04', title: 'Invoke Rokai', copy: 'Call the reusable skill by name whenever you want a policy check.', code: '$rokai' },
+  { number: '05', title: 'State your policy', copy: 'Describe what must remain true in plain English.', code: 'Use Rokai. Keep at least 40% in USDC, never sell BTC, and don’t let any altcoin exceed 20%.' },
+  { number: '06', title: 'Review the result', copy: 'Rokai reads, evaluates, plans, and asks for approval. Execution is only possible after approval when that phase is enabled.', code: 'READ → EVALUATE → PLAN → APPROVE' },
+]
+
+const requirements = [
+  'Codex or another supported Binance Agent OS host',
+  'Binance Agent OS / MCP connection',
+  'Rokai skill',
+  'Binance Agentic account',
+]
+
+const nextSteps = ['User Policy', 'Rokai', 'Binance Agent OS', 'Portfolio Check', 'Proposed Action', 'User Approval', 'Execution', 'Verification']
+
 function App() {
   return (
     <main className="landing-shell">
@@ -53,7 +72,7 @@ function App() {
           <p className="hero-lede">Rokai turns a plain-English portfolio policy into a deterministic, reviewable action plan for Binance Agent OS.</p>
           <div className="hero-actions">
             <a className="primary-link" href="#workflow">See the workflow <ArrowRight size={16} /></a>
-            <a className="quiet-link" href="#skill">Read the skill <ChevronRight size={15} /></a>
+            <a className="quiet-link" href="#how-to-use">How to use Rokai <ChevronRight size={15} /></a>
           </div>
           <p className="host-note"><Terminal size={14} /> Rokai runs as an Agent OS skill inside supported hosts such as Codex.</p>
         </div>
@@ -111,8 +130,38 @@ function App() {
         <div className="rules-grid">{supportedRules.map((rule, index) => <article className={`rule-card reveal-item reveal-delay-${Math.min(index + 1, 3)}`} key={rule.number}><span>{rule.number}</span><h3>{rule.title}</h3><p>{rule.example}</p></article>)}</div>
       </section>
 
+      <section className="how-to-section section" id="how-to-use">
+        <div className="section-heading reveal-item"><div className="section-label"><span>05</span><span>HOW TO USE ROKAI</span></div><h2>Setup once. Then speak naturally.</h2><p>Rokai is a reusable skill inside your supported host—not a separate trading website.</p></div>
+        <div className="setup-grid">
+          {setupSteps.map((step, index) => <article className={`setup-card reveal-item reveal-delay-${Math.min(index + 1, 3)}`} key={step.number}>
+            <span className="workflow-number">{step.number}</span><h3>{step.title}</h3><p>{step.copy}</p><code>{step.code}</code>
+          </article>)}
+        </div>
+      </section>
+
+      <section className="requirements-section section reveal-item" id="requirements">
+        <div className="requirements-heading"><div className="section-label"><span>06</span><span>REQUIREMENTS</span></div><div><h2>Four pieces. One clear path.</h2><p>Keep the runtime small and the source of truth visible.</p></div></div>
+        <div className="requirements-list">{requirements.map((item) => <div key={item}><Check size={15} /><span>{item}</span></div>)}</div>
+      </section>
+
+      <section className="next-section section" id="next">
+        <div className="section-heading reveal-item"><div className="section-label"><span>07</span><span>WHAT HAPPENS NEXT</span></div><h2>From one sentence to a verified policy.</h2><p>Every step stays visible. Every action stays behind your approval.</p></div>
+        <div className="next-flow reveal-item reveal-delay-1" aria-label="Rokai workflow from user policy to verification">
+          {nextSteps.map((step, index) => <div className="next-flow-item" key={step}><span>{String(index + 1).padStart(2, '0')}</span><strong>{step}</strong>{index < nextSteps.length - 1 && <i aria-hidden="true">→</i>}</div>)}
+        </div>
+        <div className="read-only-note"><LockKeyhole size={14} /> Current demo: read-only. Execution is future-gated and never happens without explicit approval.</div>
+      </section>
+
+      <section className="video-section section reveal-item" id="demo-video">
+        <div className="section-heading"><div className="section-label"><span>08</span><span>SEE ROKAI IN ACTION</span></div><h2>A calm path from intent to action.</h2><p>The final demo recording will live here. No external video is embedded.</p></div>
+        <div className="video-placeholder" aria-label="Demo video placeholder">
+          <div className="video-placeholder-mark"><Play size={20} fill="currentColor" /></div>
+          <div><span>VIDEO PLACEHOLDER</span><strong>Add the final Rokai demo here.</strong><small>Supported-host workflow · read-only demo</small></div>
+        </div>
+      </section>
+
       <section className="safety-section section reveal-item">
-        <div className="safety-callout"><div className="section-label"><span>05</span><span>SAFETY MODEL</span></div><div><h2>Read first. Ask clearly. Act only with approval.</h2><p>Gemini interprets language only. Rokai owns the calculations. Binance Agent OS supplies account and market data. The current demo does not execute real trades.</p></div></div>
+        <div className="safety-callout"><div className="section-label"><span>09</span><span>SAFETY MODEL</span></div><div><h2>Read first. Ask clearly. Act only with approval.</h2><p>Gemini interprets language only. Rokai owns the calculations. Binance Agent OS supplies account and market data. The current demo does not execute real trades.</p></div></div>
         <div className="safety-list"><span><Check size={14} /> No invented balances or prices</span><span><Check size={14} /> Protected assets stay protected</span><span><Check size={14} /> No withdrawals or transfers</span></div>
       </section>
 
