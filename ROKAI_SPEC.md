@@ -8,6 +8,18 @@ Rokai is an AI portfolio policy agent for Binance Agent OS.
 
 Users state what must remain true in plain English. Rokai parses the request, checks current holdings, proposes the smallest compliant action, asks for approval, and verifies the result.
 
+## Current agent-first architecture
+
+Rokai's product implementation is the root `SKILL.md`, designed to run inside a supported Binance Agent OS host such as Codex. The website is a public landing page and visual explainer only. It does not directly authenticate to Binance, expose Live Mode controls, or present a simulated execution flow.
+
+The supported runtime path is:
+
+```text
+User -> Rokai Skill -> Supported Agent OS Host -> Binance Agent OS / MCP -> Agentic Account
+```
+
+Binance currently rejects arbitrary custom OAuth clients with error `3346001`. Direct custom OAuth is not a supported Rokai product path; the website must not imply otherwise. The current demo remains read-only and real execution is deferred to the explicitly approved execution phase.
+
 ## MVP scope
 
 Included:
@@ -17,48 +29,46 @@ Included:
 - Minimum asset allocation.
 - Protected assets: never sell.
 - Maximum asset exposure.
-- Binance Agent OS/MCP for real balances, live market data, permissions, Spot/Convert execution, and an Agentic sub-account.
-- Mock Mode first; guarded Live Mode later.
+- Binance Agent OS/MCP for real balances and live market data through the supported-host skill path, with an Agentic sub-account.
+- A public landing page that explains the skill architecture; it does not authenticate or control Binance directly.
+- Guarded execution only as a future, explicitly approved phase.
 
 Excluded: chat UI, complex dashboards, Futures, Margin, DeFi, x402, smart contracts, and 24/7 monitoring.
 
 ## User flow
 
-1. User opens the one-page command center.
-2. User enters a rule, for example: “Keep at least 40% in USDC, never sell BTC, and don’t let any altcoin exceed 20%.”
-3. Rokai parses the text with Gemini free tier only and displays the structured rules for review.
-4. Rokai loads mock or Binance portfolio data and calculates compliance deterministically.
-5. Rokai shows satisfied/violated rules and Rokai’s Plan: proposed conversions or sells, amounts, reasons, and constraints.
-6. User explicitly approves the plan.
-7. In Mock Mode, Rokai simulates execution. In Live Mode, it uses permitted Binance Agent OS/MCP Spot/Convert actions.
-8. Rokai shows execution progress, refreshes balances, and verifies the post-action rules.
+The website is a public visual explainer. The actual product flow runs inside a supported Agent OS host according to `SKILL.md`:
+
+1. User loads the Rokai skill in a supported host such as Codex.
+2. User states a policy in plain English.
+3. Rokai interprets the text into the five supported rules and displays them for review.
+4. Rokai reads Agentic Spot data and calculates compliance deterministically.
+5. Rokai shows satisfied/violated rules and the smallest explainable plan.
+6. User explicitly approves the displayed plan.
+7. In the current demo, execution is blocked. A future approved execution phase may use sanctioned Spot tools only.
+8. Any future execution must reread the account and verify every rule before claiming success.
 
 ## UX
 
-One page, dark, minimal, anime-inspired, calm and high-contrast.
+The website is a calm, premium, light landing page that explains the agent-first product without pretending to be the execution interface. It shows the tagline, five supported rules, the READ → INTERPRET → EVALUATE → PLAN → APPROVE → EXECUTE → VERIFY workflow, the supported-host architecture, and a concise policy-check example.
 
-- **Header:** Rokai; “Powered by Binance Agent OS”; Mock/Live mode indicator; Connect Binance.
-- **Hero:** “What must stay true?”; natural-language input; “Check My Portfolio” button; examples such as “Keep 30% in USDC”, “Never sell BTC”, and “No asset above 20%”.
-- **Portfolio snapshot:** total value, asset/value/allocation table, data source, last updated time.
-- **Rule results:** clear satisfied/violated cards showing current value and target.
-- **Rokai’s Plan:** proposed action, amount, source/target asset, rationale, estimated result, and warnings.
-- **Approval:** explicit “Approve Plan” action; no execution by merely checking rules.
-- **Progress and verification:** pending/running/completed/failed states, final balances, and rule status after execution.
+The actual workflow and safety gates live in `SKILL.md`. The current demo has no direct Binance login, Live Mode controls, or real execution.
 
 ## Architecture
 
 ```text
-UI (one page)
-  -> application state + API routes
+Public website (landing page / explainer)
+Supported Agent OS Host
+  -> Rokai Skill (`SKILL.md`)
   -> Rule Parser (Gemini adapter, parsing only)
-  -> Portfolio Adapter (mock | Binance Agent OS/MCP)
+  -> Portfolio Adapter (mock fixtures | Binance Agent OS/MCP)
   -> Deterministic Rule Engine
   -> Deterministic Planner
-  -> Execution Adapter (mock | Binance Spot/Convert via Agent OS/MCP)
+  -> [future approved phase] Guarded Spot execution
   -> Verification (fresh portfolio + Rule Engine)
 ```
 
-Recommended stack: Next.js/React, TypeScript, Tailwind CSS, and the existing Binance Agent OS/MCP integration. Use a small schema validator only if already available or clearly useful. Keep provider-specific calls out of UI components.
+Recommended stack: Vite/React, TypeScript, and the existing Binance Agent OS/MCP adapters. Use a small schema validator only if already available or clearly useful. Keep provider-specific calls out of UI components. The central agent behavior is specified in `SKILL.md`.
 
 ### Phase 3 live-data boundary
 
@@ -97,13 +107,13 @@ Parsing must normalize symbols, percentages, and synonyms, return confidence/err
 
 The planner should prefer the fewest Spot/Convert actions needed to restore the rules. All amounts and assumptions must be visible before approval.
 
-## Mock and Live modes
+## Skill and data modes
 
-**Mock Mode** is the default and must work without Binance credentials. Use deterministic fixture balances, realistic symbols, and real/public prices when available; otherwise show the fixture price timestamp. Simulated fills update the local portfolio so verification is meaningful.
+**Supported-host skill mode** is the product path. The host owns the supported Binance Agent OS/MCP connection and authorization. `SKILL.md` requests only Agentic Spot balances and required market prices for the current read-only demo, then passes them through the existing deterministic engine.
 
-**Live Mode** is opt-in. Require Binance connection, visible mode labeling, permission checks, fresh balances/prices, an explicit approval for the exact plan, and a final confirmation immediately before account-changing calls. Use the Agentic sub-account when configured. Never expose secrets to the browser or infer permission to trade.
+**Mock fixtures** remain available to test the deterministic parser, rule engine, and planner without account access. They must be labeled as mock and never presented as live Binance data.
 
-For Phase 3, Live Mode is read-only and uses Agentic Spot balances and live prices through the server-side Binance MCP adapter. Phase 3.5 connects that adapter directly to Binance's official Streamable HTTP endpoint (`https://agent.binance.com/mcp/agentic`) using the official MCP TypeScript client. `BINANCE_AGENT_OS_MCP_URL` may override the endpoint for testing, but a custom bridge is not required. Binance authorization uses OAuth authorization code + PKCE and Client ID Metadata Documents; the metadata document and callback must be hosted at the public HTTPS Rokai origin configured by `ROKAI_PUBLIC_URL`. Tokens, PKCE state, and session data remain server-side in an httpOnly session. If no OAuth session exists, Rokai starts authorization rather than attempting unauthenticated account access. Zero balances are shown as an empty state; any non-stablecoin without a resolved live USDT price fails safely instead of being valued implicitly.
+The former direct website Live Mode/OAuth flow is not a supported Rokai product path. Binance currently rejects arbitrary custom OAuth clients with error `3346001`, so the landing page does not expose Connect Binance, Live Mode, or simulated execution controls. The existing server-side adapters remain isolated for reference and future approved integration work; they are not linked from the website.
 
 ## Edge cases and safety
 
@@ -115,25 +125,26 @@ Fail closed: parsing uncertainty, stale data, missing permissions, or any mismat
 
 - A judge can understand the product and current mode within five seconds.
 - The natural-language example and the supported fixtures produce the five structured MVP rules.
-- Mock Mode checks rules, identifies violations, creates an explainable plan, simulates approval/execution, and verifies compliance.
+- The Rokai skill checks rules, identifies violations, and creates an explainable plan using supported-host data or clearly labeled fixtures.
 - Calculations and trade sizing are deterministic and testable without Gemini or Binance.
 - Live integration is isolated, permission-aware, approval-gated, and never the default.
-- The page has clear loading, empty, error, and success states and works without a chat interface.
+- The public page clearly explains the workflow and works without a chat interface; operational loading, empty, error, and success states belong to the supported-host skill runtime.
 
 ## Phased implementation plan
 
-1. **Foundation:** app shell, dark visual system, mode state, mock portfolio, fixture prices.
+1. **Foundation:** app shell, premium visual system, deterministic mock portfolio, and fixture prices.
 2. **Policy:** Gemini parsing adapter, schema, parsing fixtures, rule review UI.
 3. **Phase 2.5 — Rule coverage:** add minimum fixed stablecoin amount and minimum asset allocation parsing, validation, deterministic evaluation, planning, and display. Phase 3 starts only after this phase is reviewed and approved.
 4. **Evaluation:** deterministic rule engine, violations, tests, portfolio snapshot.
 5. **Planning:** deterministic compliant plan, estimates, warnings, approval UI.
 6. **Binance:** Agent OS/MCP read adapters, permissions, live data, Agentic sub-account configuration.
 7. **Phase 3.5 — Direct MCP connectivity:** connect the server-side adapter directly to Binance's official MCP endpoint with OAuth/PKCE; keep the integration read-only and server-side.
-8. **Execution:** mock simulation, then explicitly enabled Spot/Convert live path and verification.
-9. **Demo hardening:** polish, error handling, build/deploy verification, and the 30-second demo checklist.
+8. **Agent-first restructure:** make `SKILL.md` the central product workflow and reduce the website to a transparent public landing page. No direct custom OAuth or real execution is presented.
+9. **Execution:** only after explicit approval, with sanctioned Spot tools and post-action verification.
+10. **Demo hardening:** polish, error handling, build/deploy verification, and the supported-host demo checklist.
 
 ## Vercel deployment
 
-The Vite frontend builds to `dist`. Vercel Functions under `api/` provide the same-origin Gemini and Binance endpoints, so the deployed shape is one project: `/`, `/analysis`, and `/result` serve the SPA, while `/api/...` runs server-side Node functions. `vercel.json` keeps the two client-side routes deep-linkable without rewriting API requests.
+The Vite frontend builds to `dist`. The deployed website is a public landing page at `/`. The existing Vercel Functions under `api/` remain server-side implementation adapters but are not exposed as the product workflow because Binance rejects arbitrary custom OAuth clients. `vercel.json` may retain SPA deep-link rewrites for compatibility without making those routes part of the public product.
 
 Vercel Functions are stateless between invocations. The Binance OAuth state and tokens are stored in an encrypted, httpOnly, Secure cookie sealed with the server-only `ROKAI_SESSION_SECRET`; no plaintext token or OAuth state is available to frontend JavaScript. This is intentionally a single-project, no-database hackathon approach. Sessions are invalidated when the secret changes, and a future multi-instance production deployment should use a managed encrypted session store if cookie size or centralized revocation becomes a requirement.

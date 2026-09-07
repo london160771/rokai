@@ -2,75 +2,53 @@
 
 ## Exact 30-second demo
 
-Use Mock Mode unless live execution has been explicitly approved and rehearsed.
+Use a supported Agent OS host such as Codex. The website is only the public explainer.
 
-1. **0–5s — Frame the product:** Show “Rokai” and “Powered by Binance Agent OS”; point out Mock Mode.
-2. **5–10s — State the policy:** Enter: “Keep at least 40% in USDC, never sell BTC, and don’t let any altcoin exceed 20%.”
-3. **10–15s — Check:** Click “Check My Portfolio”; show the compact portfolio snapshot and the three parsed rules.
-4. **15–21s — Explain:** Show violated USDC/exposure rules, satisfied BTC protection, and Rokai’s Plan with amounts and rationale.
-5. **21–25s — Approve:** Click “Approve Plan” and make clear that approval is required before execution.
-6. **25–30s — Verify:** Show execution progress, updated balances, and the final compliant/satisfied state.
+1. **0–5s — Frame the product:** Show the Rokai landing page and tagline: “AI that follows your rules, not the market hype.”
+2. **5–10s — Explain the distinction:** Rokai runs as a skill inside a supported Agent OS host; the website does not directly connect to Binance.
+3. **10–16s — State the policy:** In the host, enter: “Keep at least 40% in USDC, never sell BTC, and don’t let any altcoin exceed 20%.”
+4. **16–22s — Evaluate:** Show Agentic Spot balances, required prices, the three parsed rules, and deterministic satisfied/attention results.
+5. **22–27s — Explain:** Show Rokai’s smallest proposed action and the expected before → after allocation, with BTC untouched.
+6. **27–30s — Safety boundary:** Show the explicit approval request and state that the current demo is read-only; do not execute a real trade.
 
 ## Pre-demo setup
 
-- App builds and starts from a clean run.
-- Mock Mode is selected and visibly labeled.
-- Fixture portfolio has an obvious violation: USDC below 40% and one altcoin above 20%; BTC is protected.
-- Fixture prices and timestamp are stable or the price fallback is ready.
-- Gemini parsing fixture/cached response is available for the exact demo sentence.
-- Mock execution updates balances and verification returns the expected result.
-- Browser is sized to show the full one-page flow without scrolling surprises.
-- No real API keys, real account identifiers, or sensitive balances are visible.
-- If testing Phase 3/3.5, `BINANCE_AGENT_OS_MCP_URL` points to Binance's official MCP endpoint (the default), `ROKAI_PUBLIC_URL` is a public HTTPS origin, and the browser completes Binance OAuth; the browser never receives tokens or credentials.
-- For Vercel, configure `ROKAI_SESSION_SECRET` as a server-only random value of at least 32 characters; do not put it in a `VITE_` variable.
+- `SKILL.md` is loaded in the supported host.
+- Binance MCP is connected through the host's official integration.
+- The account scope is read-only and points to the Agentic Spot account.
+- The host can read `spot.getAccount` and required `spot.tickerPrice` data.
+- No real order, conversion, transfer, or withdrawal is requested.
+- No tokens, API keys, account identifiers, or sensitive balances are shown in the public website.
+- The public landing page is available and clearly says it is an explainer.
+- If Binance access is unavailable, use the deterministic mock fixtures in the repository and label them as mock; never present them as live.
 
 ## Supported MVP policy rules
 
-Rokai Phase 2.5 supports these five deterministic rule types:
+1. Minimum stablecoin allocation: “Keep at least 40% in USDC.”
+2. Protected assets: “Never sell BTC.”
+3. Maximum asset exposure: “No altcoin above 20%.”
+4. Minimum fixed stablecoin amount: “Always keep at least 1,000 USDC.”
+5. Minimum asset allocation: “Keep at least 20% in BTC.”
 
-- Minimum stablecoin allocation: “Keep at least 40% in USDC.”
-- Minimum fixed stablecoin amount: “Always keep at least 1,000 USDC.”
-- Minimum asset allocation: “Keep at least 20% in BTC.”
-- Protected assets: “Never sell BTC.”
-- Maximum asset exposure: “No altcoin above 20%.”
+## Agent-first safety checks
 
-Phase 3 (Binance Agent OS integration) starts only after Phase 2.5 is complete and reviewed.
+- Gemini interprets policy language only.
+- Rokai calculates portfolio values, allocations, violations, and plans deterministically.
+- Missing balances, stale prices, unpriced assets, unsupported rules, or ambiguous input stop the flow safely.
+- Protected assets are never selected for sale.
+- The exact proposed action must be displayed before approval.
+- The current demo stops after approval with “Execution is not enabled in the current demo.”
+- Never claim rules were restored without a fresh post-action reread and recalculation.
 
-Phase 3 live mode is read-only: it uses Agentic Spot balances and live Spot prices for deterministic evaluation. Any execution remains unavailable until the later execution phase.
+## Binance limitation
 
-## Fallback behavior
-
-If Gemini, price data, Binance Agent OS/MCP, or the network is unavailable:
-
-- Stay in Mock Mode.
-- Use the deterministic parser fixture and clearly label the data as mock/fallback.
-- Continue through rule results, plan, approval, simulated execution, and verification.
-- Never present simulated execution as a real Binance trade.
-
-If a live demo is attempted, stop on stale data, missing permissions, an unexpected plan, or any execution error; return to Mock Mode.
-
-Phase 3/3.5 Live Mode remains read-only. No live execution is available until the later execution phase.
+Binance currently rejects arbitrary custom OAuth clients with error `3346001`. Direct custom OAuth is not part of the Rokai website flow. Use the supported-host architecture and do not impersonate another client or bypass Binance restrictions.
 
 ## Success criteria
 
-- The audience understands the tagline and the Binance Agent OS connection.
-- Natural language becomes visible, reviewable structured rules.
-- Rule calculations are understandable and deterministic.
-- The proposed plan is explainable and respects “never sell BTC”.
-- Approval is explicit; execution is not automatic.
-- The final state verifies the policy rather than merely claiming success.
-- The complete flow fits in 30 seconds and works without a chat UI.
-
-## Final submission readiness
-
-- [ ] `AGENTS.md`, `ROKAI_SPEC.md`, and this checklist are included.
-- [ ] Mock-first flow is stable without credentials.
-- [ ] Rule engine tests cover all five MVP rules and key edge cases.
-- [ ] Gemini is used only for parsing and has a safe fallback.
-- [ ] Binance Agent OS/MCP integration is isolated behind adapters.
-- [ ] Live mode is opt-in, permission-aware, approval-gated, and disabled by default.
-- [ ] No Futures, Margin, DeFi, x402, smart contracts, monitoring, or complex dashboard slipped into the MVP.
-- [ ] Loading, empty, stale-data, rejected-action, partial-fill, and verification-failure states are present.
-- [ ] Typecheck, lint, tests, and production build pass.
-- [ ] Demo script has been rehearsed once from a clean start.
-- [ ] Deployment URL and backup local demo are ready.
+- A judge understands Rokai's purpose and architecture within five seconds.
+- The difference between the landing page and the Agent OS skill is clear.
+- Natural language becomes visible, reviewable rules.
+- Calculations and the plan are deterministic and explainable.
+- Approval is explicit and no real trade is performed.
+- The five rule types remain within scope.
