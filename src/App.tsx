@@ -71,6 +71,7 @@ function App() {
           <h1>AI that follows your rules, <em>not the market hype.</em></h1>
           <p className="hero-lede">Rokai turns plain-English policy into one deterministic, reviewable next trade—then waits for approval before Codex uses Binance Agent OS and verifies the result.</p>
           <div className="hero-actions">
+            <a className="primary-link" href="https://youtu.be/kROFUPlvJyU" target="_blank" rel="noreferrer">Watch Demo <Play size={15} fill="currentColor" /></a>
             <a className="primary-link" href="#workflow">See the workflow <ArrowRight size={16} /></a>
             <a className="quiet-link" href="#how-to-use">How to use Rokai <ChevronRight size={15} /></a>
           </div>
@@ -206,10 +207,9 @@ function App() {
       </section>
 
       <section className="video-section section reveal-item" id="demo-video">
-        <div className="section-heading"><div className="section-label"><span>10</span><span>SEE ROKAI IN ACTION</span></div><h2>A calm path from intent to action.</h2><p>The final demo recording will live here. No external video is embedded.</p></div>
-        <div className="video-placeholder" aria-label="Demo video placeholder">
-          <div className="video-placeholder-mark"><Play size={20} fill="currentColor" /></div>
-          <div><span>VIDEO PLACEHOLDER</span><strong>Add the final Rokai demo here.</strong><small>Supported-host workflow · read-only demo</small></div>
+        <div className="section-heading"><div className="section-label"><span>10</span><span>SEE ROKAI IN ACTION</span></div><h2>Watch the supported-host workflow.</h2><p>See the policy check, deterministic plan, explicit approval, and verified Agentic Spot result.</p></div>
+        <div className="video-frame" aria-label="Rokai demo video">
+          <iframe src="https://www.youtube.com/embed/kROFUPlvJyU" title="Rokai demo" loading="lazy" allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen />
         </div>
       </section>
 

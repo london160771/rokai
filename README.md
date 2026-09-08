@@ -10,6 +10,10 @@ Trading agents chase signals. Research agents explain markets. Rokai is a policy
 
 Gemini interprets language only. Rokai code owns balances, allocations, violation detection, trade sizing, and verification.
 
+## Demo
+
+[Watch the Rokai demo on YouTube](https://youtu.be/kROFUPlvJyU)
+
 ## A 30-second example
 
 Planned demo starting portfolio:
