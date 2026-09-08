@@ -325,6 +325,7 @@ export function parseDemoPolicy(text: string): { policy: Policy | null; error?: 
   const protectedMatches = [...normalized.matchAll(/(?:NEVER|DO NOT)\s+SELL\s+([A-Z][A-Z0-9]{1,11})/g)]
   const maxMatches = [...normalized.matchAll(/(?:ANY\s+)?ALTCOIN(?:S)?\s+(?:EXCEED|ABOVE|OVER)\s+(\d+(?:\.\d+)?)%/g)]
   const specificMaxMatches = [...normalized.matchAll(/NO\s+(?!ALTCOINS?\b|ASSETS?\b)([A-Z][A-Z0-9]{1,11})\s+(?:EXCEED|ABOVE|OVER)\s+(\d+(?:\.\d+)?)%/g)]
+  const belowAllocationMatches = [...normalized.matchAll(/KEEP\s+([A-Z][A-Z0-9]{1,11})\s+(?:BELOW|UNDER|LESS\s+THAN)\s+(\d+(?:\.\d+)?)%/g)]
   const ambiguousMaxMatches = [...normalized.matchAll(/NO\s+ASSETS?\s+(?:EXCEED|ABOVE|OVER)\s+(\d+(?:\.\d+)?)%/g)]
   const rules: Rule[] = []
   allocationMatches.forEach((match) => {
@@ -339,6 +340,7 @@ export function parseDemoPolicy(text: string): { policy: Policy | null; error?: 
   protectedMatches.forEach((match) => rules.push({ kind: 'protected_asset', asset: match[1] }))
   maxMatches.forEach((match) => rules.push({ kind: 'max_asset_exposure', asset: 'altcoins', maxPct: Number(match[1]) }))
   specificMaxMatches.forEach((match) => rules.push({ kind: 'max_asset_exposure', asset: match[1], maxPct: Number(match[2]) }))
+  belowAllocationMatches.forEach((match) => rules.push({ kind: 'max_asset_exposure', asset: match[1], maxPct: Number(match[2]) }))
   if (ambiguousMaxMatches.length) return { policy: null, error: 'Maximum exposure rules must specify altcoins or a named asset.' }
   if (rules.length === 0) return { policy: null, error: 'Try the demo sentence or one of the examples below.' }
   if (rules.some((rule) => rule.kind === 'min_stablecoin_amount' && !stablecoinSymbols.has(rule.asset))) {

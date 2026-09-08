@@ -144,8 +144,9 @@ Every step remains visible. The public website is informational only and never c
 1. Open this repository in a supported Agent OS host such as Codex.
 2. Connect Binance MCP through the host using Binance’s official instructions: <https://developers.binance.com/en/docs/agent-native/mcp-server/agentic>.
 3. Load the root [`SKILL.md`](./SKILL.md).
-4. Start with a read-only request such as: “Run a Rokai policy check for: Keep at least 40% in USDC, never sell BTC, and no altcoin above 20%.”
-5. Review the rule results and plan. For a read-only walkthrough, stop at the approval gate. In the supported-host contract, Codex supplies only the exact results of `spot.getAccount`, `spot.tickerPrice`, and `spot.exchangeInfo`; Rokai creates the plan and final order payload internally. After a separately authorized approval, Codex may send only that returned payload once, then supply `spot.getOrder` and fresh rereads for Rokai verification.
+4. From the canonical checkout, start the deterministic runtime bridge with `npm run rokai -- --interactive`. Codex passes the exact raw `spot.getAccount`, `spot.tickerPrice`, and `spot.exchangeInfo` results to its JSON-lines `start` request; the runtime invokes the existing host-mediated session and keeps its in-memory authority alive for later approval and verification.
+5. Start with a read-only request such as: “Run a Rokai policy check for: Keep at least 40% in USDC, never sell BTC, and no altcoin above 20%.”
+6. Review the runtime's rule results and plan. Only a response with `authoritativePlan: true`, `plan.preflight: "PASS"`, a plan ID, and a deterministic action is approvable. The model must not calculate or edit quantities, quoteOrderQty, symbols, sides, filters, or rounding. After a separately authorized approval, Codex may send only that returned payload once, then supply `spot.getOrder` and fresh rereads for Rokai verification. If the runtime is unavailable, stop before approval or execution.
 
 For the actual filter-aware demo, a single order must meet Binance's live minimum notional and quantity filters. With the test exchange filters used here (`MIN_NOTIONAL` $10), a $10 portfolio cannot safely fund the two-step reserve-plus-BTC example after buffers and fees; plan for approximately $50 or more, subject to the live symbol filters and prices. Never weaken exchange filters to fit a demo amount.
 
