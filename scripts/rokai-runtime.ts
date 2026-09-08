@@ -9,6 +9,7 @@ function output(value: unknown) {
 function usage() {
   process.stdout.write('Usage: npm run rokai -- --input-file <path> | --input-json <json> | --stdin\n')
   process.stdout.write('Persistent host session: npm run rokai -- --interactive\n')
+  process.stdout.write('Ready Mode: npm run rokai -- --ready\n')
 }
 
 function argumentValue(args: string[], name: string) {
@@ -29,8 +30,9 @@ async function readOneShotInput(args: string[]) {
   return null
 }
 
-async function runInteractive() {
+async function runPersistent(announceReady = false) {
   const controller = createRokaiRuntimeController()
+  if (announceReady) output(controller.handle({ op: 'ready' }))
   const lines = createInterface({ input: process.stdin, crlfDelay: Infinity })
   for await (const line of lines) {
     if (!line.trim()) continue
@@ -46,7 +48,9 @@ const args = process.argv.slice(2)
 if (args.includes('--help')) {
   usage()
 } else if (args.includes('--interactive')) {
-  await runInteractive()
+  await runPersistent()
+} else if (args.includes('--ready')) {
+  await runPersistent(true)
 } else {
   try {
     const raw = await readOneShotInput(args)

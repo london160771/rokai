@@ -15,21 +15,21 @@ type RuntimeStartRequest = {
   op: 'start'
   policyText: string
   settlementAsset: string
-  reads: HostFreshBinanceReads
+  reads: RuntimeFreshReadInput
 }
 
 type RuntimeReplanRequest = {
   op: 'replan'
   runId: string
   settlementAsset: string
-  reads: HostFreshBinanceReads
+  reads: RuntimeFreshReadInput
 }
 
 type RuntimeApproveRequest = {
   op: 'approve'
   runId: string
   approval: string
-  reads: HostFreshBinanceReads
+  reads: RuntimeFreshReadInput
 }
 
 type RuntimeVerifyRequest = {
@@ -38,13 +38,29 @@ type RuntimeVerifyRequest = {
   reads: HostOrderVerificationReads
 }
 
-export type RokaiRuntimeRequest = RuntimeStartRequest | RuntimeReplanRequest | RuntimeApproveRequest | RuntimeVerifyRequest
+type RuntimeReadyRequest = {
+  op: 'ready'
+}
+
+type RuntimeFreshReadInput = {
+  account: unknown
+  prices: unknown
+  exchangeInfo?: unknown
+}
+
+export type RokaiRuntimeRequest = RuntimeStartRequest | RuntimeReplanRequest | RuntimeApproveRequest | RuntimeVerifyRequest | RuntimeReadyRequest
 
 export type RokaiRuntimeResponse = {
   ok: boolean
   runtime: 'rokai'
   operation: RokaiRuntimeRequest['op'] | 'error'
   error?: string
+  ready?: boolean
+  runtimeLoaded?: boolean
+  liveExecutionEnabled?: boolean
+  hostMcp?: Record<string, unknown>
+  metadataCache?: Record<string, unknown>
+  timings?: Record<string, number | string>
   authoritativePlan?: boolean
   state?: Record<string, unknown>
   portfolio?: Record<string, unknown> | null
@@ -61,6 +77,9 @@ type RuntimeSession = {
   submissions: Map<string, HostOrderSubmission>
 }
 
+const READY_MODE_METADATA_TTL_MS = 45_000
+const REQUIRED_HOST_READ_TOOLS = ['spot.getAccount', 'spot.tickerPrice', 'spot.exchangeInfo'] as const
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -73,12 +92,92 @@ function errorResponse(operation: RokaiRuntimeResponse['operation'], error: stri
   return { ok: false, runtime: 'rokai', operation, error }
 }
 
-function freshReads(value: unknown): HostFreshBinanceReads | null {
-  if (!isRecord(value) || !('account' in value) || !('prices' in value) || !('exchangeInfo' in value)) return null
+function wallClockMilliseconds() {
+  const value = Date.now()
+  if (!Number.isFinite(value)) throw new Error('The Rokai runtime clock is unavailable.')
+  return value
+}
+
+function monotonicMilliseconds() {
+  return Number(process.hrtime.bigint()) / 1_000_000
+}
+
+function elapsedMilliseconds(start: number) {
+  return Math.max(0, Math.round((monotonicMilliseconds() - start) * 100) / 100)
+}
+
+function exchangeInfoEntries(value: unknown, seen = new Set<object>()): Record<string, unknown>[] {
+  if (Array.isArray(value)) return value.flatMap((entry) => exchangeInfoEntries(entry, seen))
+  if (!isRecord(value)) return []
+  if (seen.has(value)) return []
+  seen.add(value)
+  if (typeof value.symbol === 'string' && typeof value.baseAsset === 'string' && typeof value.quoteAsset === 'string') return [value]
+  if (value.type === 'text' && typeof value.text === 'string') {
+    try { return exchangeInfoEntries(JSON.parse(value.text), seen) } catch { return [] }
+  }
+  const entries: Record<string, unknown>[] = []
+  for (const key of ['symbols', 'result', 'data', 'structuredContent', 'content']) {
+    if (key in value) entries.push(...exchangeInfoEntries(value[key], seen))
+  }
+  return entries
+}
+
+type CachedExchangeInfo = {
+  entry: Record<string, unknown>
+  cachedAt: number
+  expiresAt: number
+}
+
+class ExchangeInfoCache {
+  #entries = new Map<string, CachedExchangeInfo>()
+
+  put(value: unknown) {
+    const cachedAt = wallClockMilliseconds()
+    for (const entry of exchangeInfoEntries(value)) {
+      const symbol = typeof entry.symbol === 'string' ? entry.symbol.trim().toUpperCase() : ''
+      if (!symbol) continue
+      this.#entries.set(symbol, { entry, cachedAt, expiresAt: cachedAt + READY_MODE_METADATA_TTL_MS })
+    }
+  }
+
+  payload(): { value?: unknown; status: 'hit' | 'miss' } {
+    const now = wallClockMilliseconds()
+    const entries: Record<string, unknown>[] = []
+    for (const [symbol, cached] of this.#entries) {
+      if (now >= cached.expiresAt) {
+        this.#entries.delete(symbol)
+        continue
+      }
+      entries.push(cached.entry)
+    }
+    return entries.length ? { value: { symbols: entries }, status: 'hit' } : { status: 'miss' }
+  }
+
+  summary() {
+    const now = wallClockMilliseconds()
+    let activeEntries = 0
+    for (const [symbol, cached] of this.#entries) {
+      if (now >= cached.expiresAt) this.#entries.delete(symbol)
+      else activeEntries += 1
+    }
+    return { ttlMs: READY_MODE_METADATA_TTL_MS, activeSymbols: activeEntries }
+  }
+}
+
+function freshReads(value: unknown, cache: ExchangeInfoCache): { reads: HostFreshBinanceReads; exchangeInfoCache: 'provided' | 'hit' } | null {
+  if (!isRecord(value) || !('account' in value) || !('prices' in value)) return null
+  if (value.exchangeInfo !== undefined && value.exchangeInfo !== null) {
+    cache.put(value.exchangeInfo)
+    return {
+      reads: { account: value.account, prices: value.prices, exchangeInfo: value.exchangeInfo },
+      exchangeInfoCache: 'provided',
+    }
+  }
+  const cached = cache.payload()
+  if (cached.status === 'miss') return null
   return {
-    account: value.account,
-    prices: value.prices,
-    exchangeInfo: value.exchangeInfo,
+    reads: { account: value.account, prices: value.prices, exchangeInfo: cached.value },
+    exchangeInfoCache: 'hit',
   }
 }
 
@@ -156,7 +255,7 @@ function publicPlan(result: HostPlanResult): { plan: Record<string, unknown> | n
   }
 }
 
-function planResponse(result: HostPlanResult, policy?: Policy, operation: 'start' | 'replan' = 'start'): RokaiRuntimeResponse {
+function planResponse(result: HostPlanResult, policy?: Policy, operation: 'start' | 'replan' = 'start', timings: Record<string, number | string> = {}): RokaiRuntimeResponse {
   const plan = publicPlan(result)
   const decision = result.decision
   return {
@@ -171,53 +270,98 @@ function planResponse(result: HostPlanResult, policy?: Policy, operation: 'start
     ruleResults: decision?.ruleResults ?? [],
     expectedRuleResults: decision?.status === 'READY' ? decision.expectedRuleResults : [],
     plan: plan.plan,
+    timings,
   }
 }
 
 export function createRokaiRuntimeController() {
+  const runtimeStartedAt = monotonicMilliseconds()
   const sessions = new Map<string, RuntimeSession>()
+  const exchangeInfoCache = new ExchangeInfoCache()
+
+  const ready = (): RokaiRuntimeResponse => ({
+    ok: true,
+    runtime: 'rokai',
+    operation: 'ready',
+    ready: true,
+    runtimeLoaded: true,
+    liveExecutionEnabled: process.env.ROKAI_LIVE_EXECUTION?.trim().toLowerCase() === 'true',
+    hostMcp: {
+      mode: 'codex-mediated',
+      requiredReadTools: [...REQUIRED_HOST_READ_TOOLS],
+      availability: 'awaiting-host-read',
+      note: 'The runtime cannot inspect the host MCP connection directly. A successful start/replan proves exact authenticated reads arrived from the host.',
+    },
+    metadataCache: exchangeInfoCache.summary(),
+    timings: {
+      startupMs: elapsedMilliseconds(runtimeStartedAt),
+      readyResponseMs: elapsedMilliseconds(runtimeStartedAt),
+    },
+  })
 
   const start = (request: RuntimeStartRequest): RokaiRuntimeResponse => {
+    const operationStartedAt = monotonicMilliseconds()
     const parsed = parsePolicy(request.policyText)
     if (!parsed.policy) return errorResponse('start', parsed.error ?? 'The policy is not supported.')
-    const reads = freshReads(request.reads)
-    if (!reads) return errorResponse('start', 'The runtime requires the exact account, price, and exchange-info reads from the supported host.')
+    const resolved = freshReads(request.reads, exchangeInfoCache)
+    if (!resolved) return errorResponse('start', 'The runtime requires fresh account and price reads plus exchange-info from the host or a still-valid Ready Mode metadata cache.')
     try {
       const session = createRokaiHostMediatedSession()
-      const result = session.startRun(parsed.policy, request.settlementAsset, reads)
+      const result = session.startRun(parsed.policy, request.settlementAsset, resolved.reads)
       sessions.set(result.state.runId, { session, submissions: new Map() })
-      return planResponse(result, parsed.policy, 'start')
+      return planResponse(result, parsed.policy, 'start', {
+        operationMs: elapsedMilliseconds(operationStartedAt),
+        planningMs: elapsedMilliseconds(operationStartedAt),
+        exchangeInfoCache: resolved.exchangeInfoCache,
+        metadataTtlMs: READY_MODE_METADATA_TTL_MS,
+        mcpReads: 'host-supplied; network latency is outside the runtime',
+      })
     } catch (error) {
       return errorResponse('start', safeError(error))
     }
   }
 
   const replan = (request: RuntimeReplanRequest): RokaiRuntimeResponse => {
+    const operationStartedAt = monotonicMilliseconds()
     const runtimeSession = sessions.get(request.runId)
     if (!runtimeSession) return errorResponse('replan', 'The Rokai runtime session is unavailable; start a fresh run.')
-    const reads = freshReads(request.reads)
-    if (!reads) return errorResponse('replan', 'The runtime requires the exact account, price, and exchange-info reads from the supported host.')
+    const resolved = freshReads(request.reads, exchangeInfoCache)
+    if (!resolved) return errorResponse('replan', 'The runtime requires fresh account and price reads plus exchange-info from the host or a still-valid Ready Mode metadata cache.')
     try {
-      const result = runtimeSession.session.replan(request.runId, request.settlementAsset, reads)
-      return planResponse(result, runtimeSession.session.getRun(request.runId).originalPolicy, 'replan')
+      const result = runtimeSession.session.replan(request.runId, request.settlementAsset, resolved.reads)
+      return planResponse(result, runtimeSession.session.getRun(request.runId).originalPolicy, 'replan', {
+        operationMs: elapsedMilliseconds(operationStartedAt),
+        planningMs: elapsedMilliseconds(operationStartedAt),
+        exchangeInfoCache: resolved.exchangeInfoCache,
+        metadataTtlMs: READY_MODE_METADATA_TTL_MS,
+        mcpReads: 'host-supplied; network latency is outside the runtime',
+      })
     } catch (error) {
       return errorResponse('replan', safeError(error))
     }
   }
 
   const approve = (request: RuntimeApproveRequest): RokaiRuntimeResponse => {
+    const operationStartedAt = monotonicMilliseconds()
     const runtimeSession = sessions.get(request.runId)
     if (!runtimeSession) return errorResponse('approve', 'The Rokai runtime session is unavailable; the plan cannot be approved.')
-    const reads = freshReads(request.reads)
-    if (!reads) return errorResponse('approve', 'The runtime requires fresh account, price, and exchange-info reads before approval.')
+    const resolved = freshReads(request.reads, exchangeInfoCache)
+    if (!resolved) return errorResponse('approve', 'The runtime requires fresh account and price reads plus exchange-info from the host or a still-valid Ready Mode metadata cache before approval.')
     try {
-      const result = runtimeSession.session.approveAndPrepare(request.runId, request.approval, reads)
+      const result = runtimeSession.session.approveAndPrepare(request.runId, request.approval, resolved.reads)
       const response: RokaiRuntimeResponse = {
         ok: Boolean(result.submission),
         runtime: 'rokai',
         operation: 'approve',
         ...(result.error ? { error: result.error } : {}),
         state: publicState(result),
+        timings: {
+          operationMs: elapsedMilliseconds(operationStartedAt),
+          approvalAndFreshPreflightMs: elapsedMilliseconds(operationStartedAt),
+          exchangeInfoCache: resolved.exchangeInfoCache,
+          metadataTtlMs: READY_MODE_METADATA_TTL_MS,
+          mcpReads: 'host-supplied; network latency is outside the runtime',
+        },
       }
       if (result.submission) {
         const submissionId = randomUUID()
@@ -239,6 +383,7 @@ export function createRokaiRuntimeController() {
   }
 
   const verify = (request: RuntimeVerifyRequest): RokaiRuntimeResponse => {
+    const operationStartedAt = monotonicMilliseconds()
     for (const runtimeSession of sessions.values()) {
       const submission = runtimeSession.submissions.get(request.submissionId)
       if (!submission) continue
@@ -254,6 +399,11 @@ export function createRokaiRuntimeController() {
           ...(result.error ? { error: result.error } : {}),
           state: publicState(result),
           verification: result.verification as unknown as Record<string, unknown> | undefined,
+          timings: {
+            operationMs: elapsedMilliseconds(operationStartedAt),
+            verificationMs: elapsedMilliseconds(operationStartedAt),
+            mcpReads: 'host-supplied; network latency is outside the runtime',
+          },
         }
       } catch (error) {
         return errorResponse('verify', safeError(error))
@@ -264,6 +414,7 @@ export function createRokaiRuntimeController() {
 
   const handle = (request: unknown): RokaiRuntimeResponse => {
     if (!isRecord(request) || typeof request.op !== 'string') return errorResponse('error', 'A runtime operation is required.')
+    if (request.op === 'ready') return ready()
     if (request.op === 'start') return start(request as unknown as RuntimeStartRequest)
     if (request.op === 'replan') return replan(request as unknown as RuntimeReplanRequest)
     if (request.op === 'approve') return approve(request as unknown as RuntimeApproveRequest)

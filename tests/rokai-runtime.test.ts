@@ -46,10 +46,74 @@ assert.equal((oneShot.plan?.action as { quoteOrderQty?: number }).quoteOrderQty,
 assert.equal((oneShot.plan?.preflight as string), 'PASS')
 
 const controller = createRokaiRuntimeController()
+const ready = controller.handle({ op: 'ready' })
+assert.equal(ready.ok, true)
+assert.equal(ready.ready, true)
+assert.equal(ready.runtimeLoaded, true)
+assert.equal((ready.hostMcp as { mode: string }).mode, 'codex-mediated')
+assert.deepEqual((ready.hostMcp as { requiredReadTools: string[] }).requiredReadTools, ['spot.getAccount', 'spot.tickerPrice', 'spot.exchangeInfo'])
+
 const started = controller.handle({ op: 'start', policyText, settlementAsset: 'USDT', reads })
 assert.equal(started.ok, true)
 assert.equal(started.authoritativePlan, true)
 assert.equal(started.plan?.planId !== undefined, true)
+
+const warmPolicy = controller.handle({
+  op: 'start',
+  policyText,
+  settlementAsset: 'USDT',
+  reads: { account: reads.account, prices: reads.prices },
+})
+assert.equal(warmPolicy.ok, true)
+assert.equal(warmPolicy.authoritativePlan, true)
+assert.equal(warmPolicy.timings?.exchangeInfoCache, 'hit')
+assert.equal((warmPolicy.timings?.metadataTtlMs as number), 45_000)
+
+const wrappedController = createRokaiRuntimeController()
+const wrappedStart = wrappedController.handle({
+  op: 'start',
+  policyText,
+  settlementAsset: 'USDT',
+  reads: { account: reads.account, prices: reads.prices, exchangeInfo: { content: [{ type: 'text', text: JSON.stringify(reads.exchangeInfo) }] } },
+})
+assert.equal(wrappedStart.ok, true)
+const wrappedWarm = wrappedController.handle({
+  op: 'start',
+  policyText,
+  settlementAsset: 'USDT',
+  reads: { account: reads.account, prices: reads.prices },
+})
+assert.equal(wrappedWarm.ok, true)
+assert.equal(wrappedWarm.timings?.exchangeInfoCache, 'hit')
+
+const missingFreshAccount = controller.handle({
+  op: 'start',
+  policyText,
+  settlementAsset: 'USDT',
+  reads: { account: reads.account },
+})
+assert.equal(missingFreshAccount.ok, false)
+assert.match(missingFreshAccount.error ?? '', /account and price/i)
+
+const originalDateNow = Date.now
+const cacheExpiryNow = originalDateNow() + 45_001
+Date.now = () => cacheExpiryNow
+try {
+  const expiredMetadata = controller.handle({
+    op: 'start',
+    policyText,
+    settlementAsset: 'USDT',
+    reads: { account: reads.account, prices: reads.prices },
+  })
+  assert.equal(expiredMetadata.ok, false)
+  assert.match(expiredMetadata.error ?? '', /exchange-info/i)
+} finally {
+  Date.now = originalDateNow
+}
+
+const unsupportedOperation = controller.handle({ op: 'arbitrary-command' })
+assert.equal(unsupportedOperation.ok, false)
+assert.match(unsupportedOperation.error ?? '', /unsupported/i)
 
 const stopped = runRokaiRuntime({
   policyText: 'Buy something when the market looks good.',

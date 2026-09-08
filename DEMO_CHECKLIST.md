@@ -24,6 +24,8 @@ Use a supported Agent OS host such as Codex. The website is only the public expl
 - No tokens, API keys, account identifiers, or sensitive balances are shown in the public website.
 - The public landing page is available and clearly says it is an explainer.
 - If Binance access is unavailable, use the deterministic mock fixtures in the repository and label them as mock; never present them as live.
+- For repeated host runs, start `npm run rokai -- --ready` once from the canonical checkout. Keep that process alive between plan creation, approval, and verification; do not restart it while an approval is pending.
+- Confirm the Ready Mode response reports `runtimeLoaded: true` and the effective `ROKAI_LIVE_EXECUTION` value. It reports the required host read tools as `awaiting-host-read`; a successful policy start proves the authenticated host reads were supplied. No account balances are prewarmed or cached.
 
 ## Verified first funded execution
 
@@ -99,6 +101,7 @@ The deterministic supported-host wiring is implemented, but live writes remain d
 - A $10 portfolio cannot safely satisfy the two-step reserve-plus-BTC fixture when the live symbol minimum notional is $10; use approximately $50 or more for that filter-aware demo, subject to live filters and prices. The verified BNBUSDT example started with approximately $12, and its final BNB allocation correctly remained below target after quantization.
 - `createRokaiHostMediatedSession()` accepts only the host's exact fresh account, price, and exchange-info results. It calls the deterministic planner internally, returns one exact order payload only after `approve`, `approve plan`, or `APPROVE <planId>` and fresh preflight, and exposes no executor or raw submission API. Codex may send only that returned payload to `spot.newOrder`, once, then pass `spot.getOrder` and fresh rereads to verification. No host caller can supply a fabricated balance, price, exchange filter, planner decision, timestamp, threshold, executor, credential, or order authority.
 - With `ROKAI_LIVE_EXECUTION=false`, `spot.newOrder` is never called.
+- Ready Mode may reuse a valid exchange-info cache entry for 45 seconds, but every policy and approval path requires current account and price reads. Review the returned `timings` fields; MCP request latency is measured by the host, not the local runtime.
 
 ## Binance limitation
 
