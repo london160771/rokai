@@ -79,6 +79,60 @@ assert.equal(funded50.nextTrade.sourceQuantity, 6.06)
 assert.match(funded50.nextTrade.rationale, /final executable BUY quantity 0\.008 BNB/i)
 assert.equal(funded50.expectedRuleResults.find((result) => result.rule.kind === 'min_asset_allocation')?.passed, true)
 
+const resetPolicy = policy(
+  { kind: 'min_stablecoin', asset: 'USDT', minPct: 90 },
+  { kind: 'max_asset_exposure', asset: 'BNB', maxPct: 10 },
+  { kind: 'protected_asset', asset: 'USDT' },
+  { kind: 'min_stablecoin_amount', asset: 'USDT', minAmount: 10 },
+)
+
+for (const price of [743, 755]) {
+  const reset = ready(planNextTrade(
+    [asset('USDT', 5.97624, 'stablecoin'), asset('BNB', 0.007994, 'core', { priceUsd: price })],
+    resetPolicy,
+    { runId: `reset-sell-${price}`, settlementAsset: 'USDT', market: bnbMarket },
+  ))
+  assert.equal(reset.nextTrade.source, 'BNB')
+  assert.equal(reset.nextTrade.target, 'USDT')
+  assert.equal(reset.nextTrade.sourceQuantity, 0.007, 'SELL sizing uses the next valid lot after flooring')
+  assert.ok(reset.nextTrade.amountUsd >= 5, 'final quantized SELL meets minimum notional')
+  assert.match(reset.nextTrade.rationale, /final executable SELL quantity 0\.007 BNB/i)
+  assert.equal(reset.violationScoreExpected, 0, 'expected score uses the final executable quantity')
+  assert.ok(reset.expectedRuleResults.every((result) => result.passed))
+}
+
+const resetStepUp = ready(planNextTrade(
+  [asset('USDT', 5.97624, 'stablecoin'), asset('BNB', 0.007994, 'core', { priceUsd: 743.82 })],
+  resetPolicy,
+  { runId: 'reset-step-up', settlementAsset: 'USDT', market: bnbMarket },
+))
+assert.ok(0.006 * 743.82 < 5, 'the floored .006 BNB candidate is below minimum notional')
+assert.ok(0.007 * 743.82 >= 5, 'the next .001 BNB step satisfies minimum notional')
+assert.equal(resetStepUp.nextTrade.sourceQuantity, 0.007)
+
+const insufficientNextStep = planNextTrade(
+  [asset('USDT', 5.97624, 'stablecoin'), asset('BNB', 0.007994, 'core', { priceUsd: 743.82 })],
+  resetPolicy,
+  {
+    runId: 'reset-next-step-too-large',
+    settlementAsset: 'USDT',
+    market: {
+      ...bnbMarket,
+      filters: bnbMarket.filters?.map((filter) => filter.filterType === 'NOTIONAL' ? { ...filter, minNotional: 5.3 } : filter),
+    },
+  },
+)
+assert.equal(insufficientNextStep.status, 'STOP')
+assert.ok(insufficientNextStep.status === 'STOP' && insufficientNextStep.candidatesConsidered.some((candidate) => /FREE balance/i.test(candidate.rejectionReason ?? '')))
+
+const protectedReset = planNextTrade(
+  [asset('USDT', 5.97624, 'stablecoin'), asset('BNB', 0.007994, 'core', { priceUsd: 743.82 })],
+  policy(...resetPolicy.rules, { kind: 'protected_asset', asset: 'BNB' }),
+  { runId: 'reset-protected-bnb', settlementAsset: 'USDT', market: bnbMarket },
+)
+assert.equal(protectedReset.status, 'STOP')
+assert.ok(protectedReset.status === 'STOP' && protectedReset.candidatesConsidered.some((candidate) => /protected/i.test(candidate.rejectionReason ?? '')))
+
 const observedAfterFill = evaluateRules([
   asset('USDT', 5.97624, 'stablecoin'),
   asset('BNB', 0.007994, 'core', { priceUsd: 752.97 }),

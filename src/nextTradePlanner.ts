@@ -380,6 +380,10 @@ function usableBuyLotFilter(market: ExchangeSymbolInfo) {
   return market.filters?.find((filter) => filter.filterType === 'LOT_SIZE' && isUsable(filter))
 }
 
+function usableSellLotFilter(market: ExchangeSymbolInfo) {
+  return usableBuyLotFilter(market)
+}
+
 function marketNotionalBounds(market: ExchangeSymbolInfo) {
   const applicable = (market.filters ?? []).filter((filter) =>
     (filter.filterType === 'NOTIONAL' || filter.filterType === 'MIN_NOTIONAL')
@@ -474,6 +478,99 @@ function projectBuyCandidate(
       break
     }
     if (!rounded || hasUnresolvedMinimumForTarget(selectedResults, action.target)) return { rejectionReason: 'Exchange quantization leaves the target minimum unsatisfied within safe spend limits.' }
+  }
+
+  return selected
+}
+
+function projectSellCandidate(
+  assets: Asset[],
+  policy: Policy,
+  action: CandidateAction,
+  targetPriceUsd: number,
+  market: ExchangeSymbolInfo,
+): { action: CandidateAction; sourceDebit: number; targetCredit: number; expectedAssets: Asset[] } | { rejectionReason: string } | null {
+  const source = findAsset(assets, action.source)
+  const baseAsset = market.baseAsset.trim().toUpperCase()
+  const quoteAsset = market.quoteAsset.trim().toUpperCase()
+  if (baseAsset !== action.source || quoteAsset !== action.target) return null
+
+  const lot = usableSellLotFilter(market)
+  if (!lot || lot.minQty === undefined || lot.maxQty === undefined || lot.stepSize === undefined) {
+    return { rejectionReason: 'Fresh Spot quantity filters are required to size the SELL safely.' }
+  }
+  if (!source || !Number.isFinite(action.sourceQuantity) || action.sourceQuantity <= 0) {
+    return { rejectionReason: 'The intended SELL quantity is not executable.' }
+  }
+
+  const free = freeBalance(source)
+  if (action.sourceQuantity > free + epsilon) {
+    return { rejectionReason: 'The intended SELL quantity exceeds the source FREE balance.' }
+  }
+  const notionalBounds = marketNotionalBounds(market)
+  const factor = (1 - executionSafetyConfig.feeRate) * (1 - (executionSafetyConfig.slippageBps / 10_000))
+  const evaluate = (quantity: number) => {
+    const grossNotional = quantity * source.priceUsd
+    const targetCredit = (grossNotional * factor) / targetPriceUsd
+    const projectedAction: CandidateAction = {
+      ...action,
+      amountUsd: grossNotional,
+      sourceQuantity: quantity,
+      rationale: `${action.rationale}; final executable SELL quantity ${quantity} ${action.source} after exchange quantization`,
+    }
+    const expectedAssets = applyCandidate(assets, projectedAction, targetPriceUsd, { sourceDebit: quantity, targetCredit })
+    return {
+      action: projectedAction,
+      sourceDebit: quantity,
+      targetCredit,
+      expectedAssets,
+      expectedRuleResults: evaluateRules(expectedAssets, policy),
+      grossNotional,
+    }
+  }
+
+  const intended = evaluate(action.sourceQuantity)
+  const intendedPasses = intended.expectedRuleResults.map((result) => result.passed)
+  const preservesPlannedPasses = (candidate: ReturnType<typeof evaluate>) => candidate.expectedRuleResults.every(
+    (result, index) => !intendedPasses[index] || result.passed,
+  )
+  const isExchangeValid = (candidate: ReturnType<typeof evaluate>) => candidate.sourceDebit >= lot.minQty!
+    && candidate.sourceDebit <= lot.maxQty!
+    && candidate.sourceDebit <= free + epsilon
+    && candidate.grossNotional >= notionalBounds.min
+    && candidate.grossNotional <= notionalBounds.max
+  const isValid = (candidate: ReturnType<typeof evaluate>) => isExchangeValid(candidate)
+    && preservesPlannedPasses(candidate)
+
+  const floorQuantity = quantizeDownForMarket(action.sourceQuantity, lot.stepSize, market.baseAssetPrecision)
+  if (floorQuantity === null || floorQuantity <= 0) return { rejectionReason: 'The intended SELL amount floors to zero at the exchange step size.' }
+
+  let selected = evaluate(floorQuantity)
+  if (!isValid(selected)) {
+    let quantity = floorQuantity >= lot.minQty ? floorQuantity + lot.stepSize : lot.minQty
+    let rounded: ReturnType<typeof evaluate> | undefined
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const alignedQuantity = quantizeDownForMarket(quantity, lot.stepSize, market.baseAssetPrecision)
+      if (alignedQuantity === null || alignedQuantity <= 0) return { rejectionReason: 'The next valid SELL quantity cannot be represented safely.' }
+      if (alignedQuantity > free + epsilon) return { rejectionReason: 'The next valid SELL quantity exceeds the source FREE balance.' }
+      if (alignedQuantity > action.sourceQuantity * (1 + executionSafetyConfig.maxRoundUpPct / 100) + epsilon) {
+        return { rejectionReason: 'The exchange step requires a SELL increase beyond Rokai’s fixed sizing bound.' }
+      }
+
+      const candidate = evaluate(alignedQuantity)
+      if (isValid(candidate)) {
+        rounded = candidate
+        break
+      }
+      quantity = alignedQuantity + lot.stepSize
+    }
+    if (!rounded) {
+      if (floorQuantity * source.priceUsd < notionalBounds.min) {
+        return { rejectionReason: 'The final quantized SELL quantity is below Binance minimum notional and no safe next step is available.' }
+      }
+      return { rejectionReason: 'Exchange quantization would lose a planned policy improvement within safe SELL limits.' }
+    }
+    selected = rounded
   }
 
   return selected
@@ -706,7 +803,13 @@ export function planNextTrade(
       let action = baseAction
       let projection: { sourceDebit: number; targetCredit: number } | undefined
       if (options.market) {
-        const projected = projectBuyCandidate(assets, policy, results, baseAction, targetPriceUsd, options.market)
+        const marketBase = options.market.baseAsset.trim().toUpperCase()
+        const marketQuote = options.market.quoteAsset.trim().toUpperCase()
+        const projected = marketBase === baseAction.target && marketQuote === baseAction.source
+          ? projectBuyCandidate(assets, policy, results, baseAction, targetPriceUsd, options.market)
+          : marketBase === baseAction.source && marketQuote === baseAction.target
+            ? projectSellCandidate(assets, policy, baseAction, targetPriceUsd, options.market)
+            : null
         if (projected && 'rejectionReason' in projected) {
           summaries.push({
             ...baseAction,
