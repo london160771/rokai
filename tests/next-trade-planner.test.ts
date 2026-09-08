@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { planNextTrade, type NextTradeDecision } from '../src/nextTradePlanner.ts'
 import type { Asset } from '../src/mockData.ts'
-import type { Policy, Rule } from '../src/rules.ts'
+import { evaluateRules, type Policy, type Rule } from '../src/rules.ts'
+import type { ExchangeSymbolInfo } from '../src/execution.ts'
 
 function asset(symbol: string, quantity: number, kind: Asset['kind'], options: Partial<Asset> = {}): Asset {
   return {
@@ -25,6 +26,69 @@ function ready(decision: NextTradeDecision) {
   if (decision.status !== 'READY') throw new Error('Expected a READY decision')
   return decision
 }
+
+const bnbMarket: ExchangeSymbolInfo = {
+  symbol: 'BNBUSDT',
+  baseAsset: 'BNB',
+  quoteAsset: 'USDT',
+  status: 'TRADING',
+  isSpotTradingAllowed: true,
+  permissions: ['SPOT'],
+  quoteOrderQtyMarketAllowed: true,
+  baseAssetPrecision: 8,
+  quoteAssetPrecision: 8,
+  filters: [
+    { filterType: 'MARKET_LOT_SIZE', minQty: 0, maxQty: 0, stepSize: 0 },
+    { filterType: 'LOT_SIZE', minQty: 0.001, maxQty: 900_000, stepSize: 0.001 },
+    { filterType: 'NOTIONAL', minNotional: 5, applyMinToMarket: true },
+  ],
+}
+
+const fundedPolicy = policy(
+  { kind: 'min_asset_allocation', asset: 'BNB', minPct: 55 },
+  { kind: 'min_stablecoin', asset: 'USDT', minPct: 40 },
+  { kind: 'protected_asset', asset: 'BNB' },
+  { kind: 'max_asset_exposure', asset: 'altcoins', maxPct: 60 },
+  { kind: 'min_stablecoin_amount', asset: 'USDT', minAmount: 4 },
+)
+
+const funded55 = ready(planNextTrade(
+  [asset('USDT', 12, 'stablecoin')],
+  fundedPolicy,
+  { runId: 'funded-55-quantized-fixture', settlementAsset: 'USDT', referencePricesUsd: { BNB: 754 }, market: bnbMarket },
+))
+assert.equal(funded55.nextTrade.source, 'USDT')
+assert.equal(funded55.nextTrade.target, 'BNB')
+assert.equal(funded55.nextTrade.sourceQuantity, 6.792786)
+assert.match(funded55.nextTrade.rationale, /final executable BUY quantity 0\.009 BNB/i)
+assert.equal(funded55.expectedRuleResults.find((result) => result.rule.kind === 'min_asset_allocation')?.passed, true)
+
+const funded50Policy = policy(
+  { kind: 'min_asset_allocation', asset: 'BNB', minPct: 50 },
+  { kind: 'min_stablecoin', asset: 'USDT', minPct: 40 },
+  { kind: 'protected_asset', asset: 'BNB' },
+  { kind: 'max_asset_exposure', asset: 'altcoins', maxPct: 60 },
+  { kind: 'min_stablecoin_amount', asset: 'USDT', minAmount: 4 },
+)
+const funded50 = ready(planNextTrade(
+  [asset('USDT', 12, 'stablecoin')],
+  funded50Policy,
+  { runId: 'funded-50-quantized-fixture', settlementAsset: 'USDT', referencePricesUsd: { BNB: 754 }, market: bnbMarket },
+))
+assert.equal(funded50.nextTrade.sourceQuantity, 6.06)
+assert.match(funded50.nextTrade.rationale, /final executable BUY quantity 0\.008 BNB/i)
+assert.equal(funded50.expectedRuleResults.find((result) => result.rule.kind === 'min_asset_allocation')?.passed, true)
+
+const observedAfterFill = evaluateRules([
+  asset('USDT', 5.97624, 'stablecoin'),
+  asset('BNB', 0.007994, 'core', { priceUsd: 752.97 }),
+], fundedPolicy)
+assert.equal(observedAfterFill.find((result) => result.rule.kind === 'min_asset_allocation')?.passed, false)
+const observed50AfterFill = evaluateRules([
+  asset('USDT', 5.97624, 'stablecoin'),
+  asset('BNB', 0.007994, 'core', { priceUsd: 752.97 }),
+], funded50Policy)
+assert.equal(observed50AfterFill.find((result) => result.rule.kind === 'min_asset_allocation')?.passed, true)
 
 const allSatisfied = planNextTrade(
   [asset('USDC', 60, 'stablecoin'), asset('BTC', 40, 'core')],

@@ -6,6 +6,7 @@ import {
   type Rule,
   type RuleResult,
 } from './rules.js'
+import type { ExchangeFilter, ExchangeSymbolInfo } from './execution.js'
 
 export type CandidateAction = {
   source: string
@@ -50,6 +51,7 @@ export type NextTradePlannerOptions = {
   runId?: string
   settlementAsset?: string
   referencePricesUsd?: Record<string, number>
+  market?: ExchangeSymbolInfo
 }
 
 type NormalizedInput = {
@@ -77,6 +79,7 @@ const symbolPattern = /^[A-Z][A-Z0-9]{1,11}$/
 const stablecoinSymbols = new Set(['USDC', 'USDT', 'BUSD', 'FDUSD', 'DAI', 'USDE'])
 const epsilon = 1e-9
 const planningSafetyConfig = Object.freeze({ bufferPct: 0.5, bufferUsd: 1 })
+const executionSafetyConfig = Object.freeze({ feeRate: 0.001, slippageBps: 10, maxRoundUpPct: 10 })
 let plannerSequence = 0
 const plannerDecisions = new WeakSet<object>()
 
@@ -295,22 +298,28 @@ function makeRunId(assets: Asset[], policy: Policy, now: number, requested?: str
   return `rokai-plan-${hashText(serialized)}-${now.toString(36)}-${plannerSequence.toString(36)}`
 }
 
-function applyCandidate(assets: Asset[], action: CandidateAction, targetPriceUsd: number): Asset[] {
+function applyCandidate(
+  assets: Asset[],
+  action: CandidateAction,
+  targetPriceUsd: number,
+  projection: { sourceDebit?: number; targetCredit?: number } = {},
+): Asset[] {
   const targetExists = assets.some((asset) => asset.symbol === action.target)
+  const sourceDebit = projection.sourceDebit ?? action.sourceQuantity
+  const targetCredit = projection.targetCredit ?? action.amountUsd / targetPriceUsd
   const nextAssets = assets.map((asset) => {
     if (asset.symbol === action.source) {
       return {
         ...asset,
-        quantity: asset.quantity - action.sourceQuantity,
-        free: freeBalance(asset) - action.sourceQuantity,
+        quantity: asset.quantity - sourceDebit,
+        free: freeBalance(asset) - sourceDebit,
       }
     }
     if (asset.symbol === action.target) {
-      const targetQuantity = action.amountUsd / targetPriceUsd
       return {
         ...asset,
-        quantity: asset.quantity + targetQuantity,
-        free: freeBalance(asset) + targetQuantity,
+        quantity: asset.quantity + targetCredit,
+        free: freeBalance(asset) + targetCredit,
       }
     }
     return { ...asset }
@@ -319,8 +328,8 @@ function applyCandidate(assets: Asset[], action: CandidateAction, targetPriceUsd
     nextAssets.push({
       symbol: action.target,
       name: action.target,
-      quantity: action.amountUsd / targetPriceUsd,
-      free: action.amountUsd / targetPriceUsd,
+      quantity: targetCredit,
+      free: targetCredit,
       locked: 0,
       priceUsd: targetPriceUsd,
       change24h: 0,
@@ -328,6 +337,146 @@ function applyCandidate(assets: Asset[], action: CandidateAction, targetPriceUsd
     })
   }
   return nextAssets
+}
+
+function decimalPlaces(value: number): number {
+  const text = value.toString().toLowerCase()
+  const [coefficient, exponentText] = text.split('e')
+  const exponent = exponentText ? Number(exponentText) : 0
+  const fractionLength = coefficient.split('.')[1]?.length ?? 0
+  return Math.max(0, fractionLength - exponent)
+}
+
+function quantizeDownForMarket(value: number, stepSize?: number, precision?: number): number | null {
+  if (!Number.isFinite(value) || value < 0 || (stepSize !== undefined && (!Number.isFinite(stepSize) || stepSize <= 0))) return null
+  // Use exchange precision/step precision as the integer scale. Including all
+  // binary floating-point digits from `value` can create an unsafe 10^16+ scale
+  // for ordinary values such as 6.0600000000000005.
+  const scale = Math.max(stepSize === undefined ? 0 : decimalPlaces(stepSize), precision ?? 0)
+  const factor = 10 ** scale
+  const valueInteger = Math.floor(value * factor + 1e-8)
+  const stepInteger = stepSize === undefined ? 1 : Math.round(stepSize * factor)
+  if (!Number.isSafeInteger(valueInteger) || !Number.isSafeInteger(stepInteger) || stepInteger <= 0) return null
+  const quantizedInteger = Math.floor(valueInteger / stepInteger) * stepInteger
+  const quantized = quantizedInteger / factor
+  return Number(quantized.toFixed(precision ?? scale))
+}
+
+function quantizeUpForPrecision(value: number, precision: number): number | null {
+  if (!Number.isFinite(value) || value < 0 || !Number.isInteger(precision) || precision < 0 || precision > 18) return null
+  const factor = 10 ** precision
+  if (!Number.isSafeInteger(Math.round(value * factor))) return null
+  return Number((Math.ceil(value * factor - 1e-8) / factor).toFixed(precision))
+}
+
+function usableBuyLotFilter(market: ExchangeSymbolInfo) {
+  const isUsable = (filter: ExchangeFilter | undefined) => Boolean(
+    filter
+      && filter.minQty !== undefined && filter.maxQty !== undefined && filter.stepSize !== undefined
+      && filter.minQty > 0 && filter.maxQty > 0 && filter.stepSize > 0,
+  )
+  const marketLot = market.filters?.find((filter) => filter.filterType === 'MARKET_LOT_SIZE')
+  if (isUsable(marketLot)) return marketLot
+  return market.filters?.find((filter) => filter.filterType === 'LOT_SIZE' && isUsable(filter))
+}
+
+function marketNotionalBounds(market: ExchangeSymbolInfo) {
+  const applicable = (market.filters ?? []).filter((filter) =>
+    (filter.filterType === 'NOTIONAL' || filter.filterType === 'MIN_NOTIONAL')
+      && filter.applyToMarket !== false
+      && filter.applyMinToMarket !== false,
+  )
+  return {
+    min: applicable.map((filter) => filter.minNotional).filter((value): value is number => value !== undefined).reduce((min, value) => Math.max(min, value), 0),
+    max: applicable.map((filter) => filter.maxNotional).filter((value): value is number => value !== undefined).reduce((max, value) => Math.min(max, value), Number.POSITIVE_INFINITY),
+  }
+}
+
+function hasUnresolvedMinimumForTarget(results: RuleResult[], target: string): boolean {
+  return results.some((result) => !result.passed
+    && ('asset' in result.rule && result.rule.asset === target)
+    && (result.rule.kind === 'min_stablecoin' || result.rule.kind === 'min_stablecoin_amount' || result.rule.kind === 'min_asset_allocation'))
+}
+
+function projectBuyCandidate(
+  assets: Asset[],
+  policy: Policy,
+  results: RuleResult[],
+  action: CandidateAction,
+  targetPriceUsd: number,
+  market: ExchangeSymbolInfo,
+): { action: CandidateAction; sourceDebit: number; targetCredit: number; expectedAssets: Asset[] } | { rejectionReason: string } | null {
+  const source = findAsset(assets, action.source)
+  const baseAsset = market.baseAsset.trim().toUpperCase()
+  const quoteAsset = market.quoteAsset.trim().toUpperCase()
+  if (baseAsset !== action.target || quoteAsset !== action.source) return null
+  if (market.quoteOrderQtyMarketAllowed !== true) return { rejectionReason: 'The Spot market does not allow quote-sized market BUY orders.' }
+  const lot = usableBuyLotFilter(market)
+  const quotePrecision = market.quoteAssetPrecision
+  if (!lot || quotePrecision === undefined || lot.minQty === undefined || lot.maxQty === undefined || lot.stepSize === undefined) {
+    return { rejectionReason: 'Fresh Spot quantity and quote precision filters are required to size the BUY safely.' }
+  }
+  const notional = marketNotionalBounds(market)
+  const sourceFreeValue = source ? freeBalance(source) * source.priceUsd : 0
+  const adversePrice = targetPriceUsd * (1 + executionSafetyConfig.slippageBps / 10_000)
+  const initialQuote = quantizeDownForMarket(action.sourceQuantity, undefined, quotePrecision)
+  if (initialQuote === null || initialQuote <= 0) return { rejectionReason: 'The intended quote amount cannot be represented at the market precision.' }
+
+  const evaluate = (quantity: number, quoteOrderQty: number) => {
+    const targetCredit = quantity
+      * (1 - executionSafetyConfig.feeRate)
+      * (1 - (executionSafetyConfig.slippageBps / 10_000))
+    const projectedAction: CandidateAction = {
+      ...action,
+      amountUsd: quoteOrderQty,
+      sourceQuantity: quoteOrderQty,
+      rationale: `${action.rationale}; final executable BUY quantity ${quantity} ${action.target} after exchange quantization`,
+    }
+    const expectedAssets = applyCandidate(assets, projectedAction, targetPriceUsd, { sourceDebit: quoteOrderQty, targetCredit })
+    return { action: projectedAction, sourceDebit: quoteOrderQty, targetCredit, expectedAssets }
+  }
+
+  const floorQuantity = quantizeDownForMarket(initialQuote / adversePrice, lot.stepSize, market.baseAssetPrecision)
+  if (floorQuantity === null || floorQuantity <= 0) return { rejectionReason: 'The intended BUY amount floors to zero at the exchange step size.' }
+
+  let selected = evaluate(floorQuantity, initialQuote)
+  let selectedResults = evaluateRules(selected.expectedAssets, policy)
+  const floorSatisfiesTarget = !hasUnresolvedMinimumForTarget(selectedResults, action.target)
+  const floorValid = floorQuantity >= lot.minQty
+    && floorQuantity <= lot.maxQty
+    && initialQuote >= notional.min
+    && initialQuote <= notional.max
+    && floorSatisfiesTarget
+
+  if (!floorValid) {
+    let quantity = floorQuantity >= lot.minQty ? floorQuantity + lot.stepSize : lot.minQty
+    let rounded: ReturnType<typeof evaluate> | undefined
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const alignedQuantity = quantizeDownForMarket(quantity, lot.stepSize, market.baseAssetPrecision)
+      if (alignedQuantity === null || alignedQuantity <= 0) return { rejectionReason: 'The next valid BUY quantity cannot be represented safely.' }
+      const requiredQuote = quantizeUpForPrecision(alignedQuantity * adversePrice, quotePrecision)
+      if (requiredQuote === null) return { rejectionReason: 'The next valid BUY quote amount cannot be represented safely.' }
+      const actualQuantity = quantizeDownForMarket(requiredQuote / adversePrice, lot.stepSize, market.baseAssetPrecision)
+      if (actualQuantity === null || actualQuantity < alignedQuantity) {
+        quantity = alignedQuantity + lot.stepSize
+        continue
+      }
+      if (requiredQuote > initialQuote * (1 + executionSafetyConfig.maxRoundUpPct / 100) + 1e-8) return { rejectionReason: 'The exchange step requires a quote increase beyond Rokai’s fixed sizing bound.' }
+      if (requiredQuote > sourceFreeValue + 1e-8) return { rejectionReason: 'The next valid BUY quantity exceeds the source FREE balance.' }
+      if (actualQuantity < lot.minQty || actualQuantity > lot.maxQty || requiredQuote < notional.min || requiredQuote > notional.max) return { rejectionReason: 'The next valid BUY quantity fails a required Spot exchange filter.' }
+      rounded = evaluate(actualQuantity, requiredQuote)
+      selectedResults = evaluateRules(rounded.expectedAssets, policy)
+      if (hasUnresolvedMinimumForTarget(selectedResults, action.target)) {
+        quantity = actualQuantity + lot.stepSize
+        continue
+      }
+      selected = rounded
+      break
+    }
+    if (!rounded || hasUnresolvedMinimumForTarget(selectedResults, action.target)) return { rejectionReason: 'Exchange quantization leaves the target minimum unsatisfied within safe spend limits.' }
+  }
+
+  return selected
 }
 
 function targetPrice(assets: Asset[], target: string, options: NextTradePlannerOptions): number | null {
@@ -554,7 +703,28 @@ export function planNextTrade(
         continue
       }
 
-      const expectedAssets = applyCandidate(assets, baseAction, targetPriceUsd)
+      let action = baseAction
+      let projection: { sourceDebit: number; targetCredit: number } | undefined
+      if (options.market) {
+        const projected = projectBuyCandidate(assets, policy, results, baseAction, targetPriceUsd, options.market)
+        if (projected && 'rejectionReason' in projected) {
+          summaries.push({
+            ...baseAction,
+            scoreBefore: beforeScore,
+            scoreAfter: beforeScore,
+            improves: false,
+            accepted: false,
+            rejectionReason: projected.rejectionReason,
+          })
+          continue
+        }
+        if (projected) {
+          action = projected.action
+          projection = { sourceDebit: projected.sourceDebit, targetCredit: projected.targetCredit }
+        }
+      }
+
+      const expectedAssets = applyCandidate(assets, action, targetPriceUsd, projection)
       const expectedResults = evaluateRules(expectedAssets, policy)
       const afterScore = calculateViolationScore(expectedAssets, policy)
       const breaksSatisfiedHardRule = results.some((result, index) => result.passed && !expectedResults[index].passed)
@@ -567,7 +737,7 @@ export function planNextTrade(
       else if (!feasible) rejectionReason = 'The candidate would leave no feasible path for an unresolved rule.'
 
       const summary: CandidateSummary = {
-        ...baseAction,
+        ...action,
         scoreBefore: beforeScore,
         scoreAfter: afterScore,
         improves,
@@ -575,7 +745,7 @@ export function planNextTrade(
         ...(rejectionReason ? { rejectionReason } : {}),
       }
       summaries.push(summary)
-      if (!rejectionReason) candidates.push({ action: baseAction, summary, expectedAssets, expectedRuleResults: expectedResults, rulesImproved, priority: need.priority })
+      if (!rejectionReason) candidates.push({ action, summary, expectedAssets, expectedRuleResults: expectedResults, rulesImproved, priority: need.priority })
     }
   }
 

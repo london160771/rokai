@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Policy, RuleResult } from '../src/rules.js'
 import { isPlannerDecision, type NextTradeDecision } from '../src/nextTradePlanner.js'
+import { ROKAI_APPROVAL_TTL_MS } from '../src/execution.js'
 
 export const MAX_TRADES_PER_RUN = 3
 
@@ -88,7 +89,7 @@ type StoredRun = {
   allPlanIds: Set<string>
 }
 
-const defaultPlanTtlMs = 60_000
+const defaultPlanTtlMs = ROKAI_APPROVAL_TTL_MS
 const scoreEpsilon = 1e-9
 const symbolPattern = /^[A-Z][A-Z0-9]{1,11}$/
 
@@ -133,6 +134,15 @@ function requireActivePlan(run: StoredRun, planId?: string): ActivePlan {
   if (!run.activePlan || !run.state.activePlanId) throw new PolicyRunStateError('NO_ACTIVE_PLAN', 'The run has no active plan.')
   if (planId && run.state.activePlanId !== planId) throw new PolicyRunStateError('WRONG_PLAN', 'The plan ID does not match the active plan.')
   return run.activePlan
+}
+
+function resolveApprovalPlanId(approvalText: string, activePlanId: string): string {
+  if (typeof approvalText !== 'string') throw new PolicyRunStateError('INVALID_APPROVAL', `Approval must be approve, approve plan, or APPROVE ${activePlanId}.`)
+  const trimmed = approvalText.trim()
+  if (/^approve$/i.test(trimmed) || /^approve\s+plan$/i.test(trimmed)) return activePlanId
+  const explicit = /^approve\s+(\S+)$/i.exec(trimmed)
+  if (explicit && explicit[1].toUpperCase() === activePlanId.toUpperCase()) return activePlanId
+  throw new PolicyRunStateError('INVALID_APPROVAL', `Approval must be approve, approve plan, or APPROVE ${activePlanId}.`)
 }
 
 function normalizedProtectedAssets(assets: string[]): string[] {
@@ -322,7 +332,7 @@ export class PolicyRunStore {
     const run = requireRun(this.#runs, runId)
     const currentTime = timestamp(now)
     const plan = requireActivePlan(run)
-    if (approvalText !== `APPROVE ${plan.planId}`) throw new PolicyRunStateError('INVALID_APPROVAL', `Approval must exactly match APPROVE ${plan.planId}.`)
+    resolveApprovalPlanId(approvalText, plan.planId)
     if (run.state.activePlanId !== plan.planId) throw new PolicyRunStateError('STALE_PLAN', 'The plan is no longer active.')
     if (plan.status !== 'PENDING') throw new PolicyRunStateError('PLAN_NOT_PENDING', 'The plan has already been submitted, consumed, or invalidated.')
     if (currentTime >= plan.expiresAt) {

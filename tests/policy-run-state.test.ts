@@ -9,6 +9,7 @@ import {
 import { planNextTrade } from '../src/nextTradePlanner.ts'
 import type { NextTradeDecision } from '../src/nextTradePlanner.ts'
 import type { Policy } from '../src/rules.ts'
+import { ROKAI_APPROVAL_TTL_MS } from '../src/execution.ts'
 
 const basePolicy: Policy = {
   sourceText: 'Keep at least 40% in USDC.',
@@ -32,7 +33,7 @@ function readyDecision(tag: string): Extract<NextTradeDecision, { status: 'READY
   return decision
 }
 
-function planInput(tag: string, ttlMs = 60_000): CreatePlanInput {
+function planInput(tag: string): CreatePlanInput {
   return {
     decision: readyDecision(tag),
     snapshotHash: `snapshot-${tag}-hash`,
@@ -44,15 +45,14 @@ function planInput(tag: string, ttlMs = 60_000): CreatePlanInput {
       newClientOrderId: `rokai-${tag}`,
     },
     protectedAssets: ['BTC'],
-    ttlMs,
   }
 }
 
-function createPendingStore(tag = 'one', ttlMs?: number): { store: PolicyRunStore; runId: string; plan: ActivePlan } {
+function createPendingStore(tag = 'one'): { store: PolicyRunStore; runId: string; plan: ActivePlan } {
   const store = new PolicyRunStore()
   const run = store.createRun(basePolicy, now)
   store.beginPlanning(run.runId, now + 1)
-  const plan = store.createPlan(run.runId, planInput(tag, ttlMs), now + 2)
+  const plan = store.createPlan(run.runId, planInput(tag), now + 2)
   assert.ok(plan)
   return { store, runId: run.runId, plan }
 }
@@ -74,6 +74,7 @@ assert.match(first.plan.planId, /^[0-9a-f-]{36}$/)
 assert.equal(first.plan.runId, first.runId)
 assert.equal(first.plan.status, 'PENDING')
 assert.equal(first.plan.snapshotHash, 'snapshot-one-hash')
+assert.equal(first.plan.expiresAt, now + ROKAI_APPROVAL_TTL_MS)
 assert.equal(first.plan.protectedAssets[0], 'BTC')
 assert.equal(first.store.getRun(first.runId).status, 'AWAITING_APPROVAL')
 assert.equal(first.store.getRun(first.runId).activePlanId, first.plan.planId)
@@ -82,8 +83,7 @@ const clonedPlan = first.store.getActivePlan(first.runId)
 assert.ok(clonedPlan)
 if (clonedPlan) clonedPlan.status = 'CONSUMED'
 assert.equal(first.store.getActivePlan(first.runId)?.status, 'PENDING')
-assert.throws(() => first.store.approve(first.runId, 'Approve', now + 3), (error: unknown) => error instanceof PolicyRunStateError && error.code === 'INVALID_APPROVAL')
-assert.throws(() => first.store.approve(first.runId, `APPROVE ${first.plan.planId}-wrong`, now + 3), /must exactly match/i)
+assert.throws(() => first.store.approve(first.runId, `APPROVE ${first.plan.planId}-wrong`, now + 3), /approve.*plan|plan ID/i)
 const approved = first.store.approve(first.runId, `APPROVE ${first.plan.planId}`, now + 3)
 assert.equal(approved.status, 'SUBMITTING')
 assert.equal(first.store.getActivePlan(first.runId)?.status, 'SUBMITTING')
@@ -94,6 +94,31 @@ assert.equal(claimed.tradeCount, 1)
 assert.deepEqual(claimed.submittedPayloadHashes, [first.plan.payloadHash])
 assert.throws(() => first.store.claimSubmission(first.runId, first.plan.planId, first.plan.payloadHash), /single-use|already/i)
 assert.throws(() => first.store.approve(first.runId, `APPROVE ${first.plan.planId}`, now + 4), /already been submitted|already been submitted|submitted/i)
+
+const bareApproval = createPendingStore('bare-approval')
+const bareApproved = bareApproval.store.approve(bareApproval.runId, '  aPpRoVe  ', now + 3)
+assert.equal(bareApproved.status, 'SUBMITTING')
+assert.equal(bareApproval.store.getActivePlan(bareApproval.runId)?.planId, bareApproval.plan.planId)
+
+const approvePlanApproval = createPendingStore('approve-plan')
+const approvePlanApproved = approvePlanApproval.store.approve(approvePlanApproval.runId, 'Approve Plan', now + 3)
+assert.equal(approvePlanApproved.status, 'SUBMITTING')
+assert.equal(approvePlanApproval.store.getActivePlan(approvePlanApproval.runId)?.planId, approvePlanApproval.plan.planId)
+
+const mixedCaseExplicit = createPendingStore('mixed-explicit')
+assert.equal(mixedCaseExplicit.store.approve(mixedCaseExplicit.runId, `approve ${mixedCaseExplicit.plan.planId.toUpperCase()}`, now + 3).status, 'SUBMITTING')
+
+const noActivePlan = new PolicyRunStore()
+const noActiveRun = noActivePlan.createRun(basePolicy, now)
+assert.throws(() => noActivePlan.approve(noActiveRun.runId, 'approve', now + 3), /no active plan/i)
+
+const consumedBare = createPendingStore('consumed-bare')
+consumedBare.store.approve(consumedBare.runId, 'approve', now + 3)
+assert.throws(() => consumedBare.store.approve(consumedBare.runId, 'approve', now + 4), /already|submitted/i)
+
+const invalidatedBare = createPendingStore('invalidated-bare')
+invalidatedBare.store.notePriceRefresh(invalidatedBare.runId, now + 3)
+assert.throws(() => invalidatedBare.store.approve(invalidatedBare.runId, 'approve', now + 4), /active plan/i)
 
 const handcraftedStore = new PolicyRunStore()
 const handcraftedRun = handcraftedStore.createRun(basePolicy)
@@ -119,8 +144,8 @@ assert.throws(
 )
 
 const expired = createPendingStore('expired')
-Date.now = () => now + 60_001
-assert.throws(() => expired.store.approve(expired.runId, `APPROVE ${expired.plan.planId}`), /expired/i)
+Date.now = () => now + ROKAI_APPROVAL_TTL_MS + 1
+assert.throws(() => expired.store.approve(expired.runId, 'approve'), /expired/i)
 Date.now = () => now
 assert.equal(expired.store.getActivePlan(expired.runId), null)
 assert.equal(expired.store.getRun(expired.runId).status, 'PLANNING')
@@ -134,7 +159,7 @@ assert.ok(replacement)
 assert.notEqual(replacement?.planId, replaced.plan.planId)
 assert.equal(replaced.store.getActivePlan(replaced.runId)?.planId, replacement?.planId)
 assert.ok(replaced.store.getRun(replaced.runId).historyPlanIds.includes(replaced.plan.planId))
-assert.throws(() => replaced.store.approve(replaced.runId, `APPROVE ${replaced.plan.planId}`, now + 5), /exactly match|active/i)
+assert.throws(() => replaced.store.approve(replaced.runId, `APPROVE ${replaced.plan.planId}`, now + 5), /approve.*plan|active/i)
 
 const stale = createPendingStore('stale')
 stale.store.noteAccountRefresh(stale.runId, now + 4)
@@ -148,7 +173,7 @@ const replanned = oldAfterReplan.store.replan(oldAfterReplan.runId, planInput('r
 assert.ok(replanned)
 assert.notEqual(replanned?.planId, oldAfterReplan.plan.planId)
 assert.equal(oldAfterReplan.store.getRun(oldAfterReplan.runId).currentStep, 2)
-assert.throws(() => oldAfterReplan.store.approve(oldAfterReplan.runId, `APPROVE ${oldAfterReplan.plan.planId}`, now + 6), /active|exactly match/i)
+assert.throws(() => oldAfterReplan.store.approve(oldAfterReplan.runId, `APPROVE ${oldAfterReplan.plan.planId}`, now + 6), /active|approve.*plan/i)
 
 const policyChanged = createPendingStore('policy')
 policyChanged.store.notePolicyChange(policyChanged.runId, changedPolicy, now + 4)

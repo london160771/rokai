@@ -168,7 +168,7 @@ async function readFreshExecutionSnapshot(adapter: BinanceExecutionAdapter, symb
   const market = normalizeExchangeSymbolInfo(exchangePayload, symbol)
   const exchangeInfoTimestamp = nowMilliseconds()
   const account = await adapter.getAccount()
-  validateSpotAccountForExecution(account)
+  validateSpotAccountForExecution(account, market)
   const balances = normalizeSpotBalances(account)
   if (!balances.length) throw new Error('The Agentic Spot account has no non-zero balances.')
   const valuationSymbols = balances.filter((balance) => !stablecoinSymbols.has(balance.symbol)).map((balance) => `${balance.symbol}USDT`)
@@ -386,13 +386,13 @@ function createSession(adapter: BinanceExecutionAdapter, close: () => Promise<vo
   }
 }
 
-/** Production entry point: MCP is created internally from Binance Agent OS. */
+/** Standalone HTTP/OAuth compatibility entry point; the hackathon demo uses the host-mediated session instead. */
 export async function createRokaiExecutionSession(options: BinanceAgentOsHttpContext): Promise<RokaiExecutionSession> {
   const connection = await createRokaiAgentOsMcpConnection(options)
   return createSession(createAdapterFromSanctionedExecutor(connection.executor), connection.close)
 }
 
-/** Test-only factory. Production code must use createRokaiExecutionSession. */
+/** Test-only factory for the legacy adapter. The supported-host path does not accept an injected executor. */
 export function createMockRokaiExecutionSessionForTests(source: McpToolExecutor): RokaiExecutionSession {
   return createSession(createAdapterFromSanctionedExecutor(source), async () => undefined)
 }

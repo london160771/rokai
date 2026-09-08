@@ -56,7 +56,7 @@ assert.ok(sellOrder.expectedTargetCredit < 700)
 assert.equal(sellOrder.type, 'MARKET')
 assert.equal(sellOrder.priceSnapshot, 70_000)
 assert.equal(sellOrder.priceTimestamp, price.timestamp)
-assert.equal(Date.parse(sellOrder.expiresAt), now + 60_000)
+assert.equal(Date.parse(sellOrder.expiresAt), now + 5 * 60_000)
 assert.match(sellOrder.planId, /^rokai-/)
 
 const buyOrder = buildExecutableOrder(buyAction, assets, [market], price, [], { now, settlementAsset: 'USDC' })
@@ -95,14 +95,87 @@ assert.throws(() => validateSpotAccountForExecution({ accountType: 'SPOT', canTr
 assert.throws(() => validateSpotAccountForExecution({ canTrade: true, permissions: ['SPOT'] }), /Spot account/i)
 const protectedFeeBinding = createApprovalBinding(sellOrder)
 protectedFeeBinding.approved = true
-assert.throws(() => assertOrderSafeToSubmit(sellOrder, protectedFeeBinding, {
+assert.doesNotThrow(() => assertOrderSafeToSubmit(sellOrder, protectedFeeBinding, {
   assets,
   protectedAssets: ['BNB'],
   currentPrice: price,
   account: { accountType: 'SPOT', canTrade: true, permissions: ['SPOT'] },
   market,
   exchangeInfoTimestamp: now,
-}), /BNB|fee/i)
+}))
+
+const agenticGroupAccount = {
+  accountType: 'SPOT',
+  canTrade: true,
+  permissions: ['TRD_GRP_068'],
+}
+const agenticGroupMarket = normalizeExchangeSymbolInfo({
+  symbols: [{
+    symbol: 'BNBUSDT',
+    baseAsset: 'BNB',
+    quoteAsset: 'USDT',
+    status: 'TRADING',
+    isSpotTradingAllowed: true,
+    quoteOrderQtyMarketAllowed: true,
+    permissions: [],
+    permissionSets: [['SPOT', 'MARGIN', 'TRD_GRP_068']],
+    baseAssetPrecision: 8,
+    quoteAssetPrecision: 2,
+    filters: [
+      { filterType: 'MARKET_LOT_SIZE', minQty: '0', maxQty: '5278.9781', stepSize: '0' },
+      { filterType: 'LOT_SIZE', minQty: '0.001', maxQty: '900000', stepSize: '0.001' },
+      { filterType: 'NOTIONAL', minNotional: '5', applyMinToMarket: true },
+    ],
+  }],
+}, 'BNBUSDT')
+assert.deepEqual(agenticGroupMarket.permissions, [])
+assert.deepEqual(agenticGroupMarket.permissionSets, [['SPOT', 'MARGIN', 'TRD_GRP_068']])
+assert.equal(validateSpotAccountForExecution(agenticGroupAccount, agenticGroupMarket).spotPermission, 'TRADING_GROUP')
+assert.equal(validateSpotAccountForExecution(agenticGroupAccount, agenticGroupMarket).agenticIdentity, 'unavailable')
+assert.equal(validateSpotAccountForExecution({ accountType: 'SPOT', canTrade: true, tradingGroup: 'TRD_GRP_068' }, agenticGroupMarket).spotPermission, 'TRADING_GROUP')
+assert.throws(() => validateSpotAccountForExecution({ ...agenticGroupAccount, permissions: ['TRD_GRP_999'] }, agenticGroupMarket), /permission|Spot/i)
+
+const bnbBuyAssets: Asset[] = [{ symbol: 'USDT', name: 'Tether', quantity: 12, free: 12, locked: 0, priceUsd: 1, change24h: 0, kind: 'stablecoin' }]
+const bnbBuyOrder = buildExecutableOrder(
+  { source: 'USDT', target: 'BNB', amountUsd: 7, sourceQuantity: 7, rationale: 'real account compatibility fixture' },
+  bnbBuyAssets,
+  [agenticGroupMarket],
+  { symbol: 'BNBUSDT', price: 756.26, timestamp: new Date(now).toISOString() },
+  ['BNB'],
+  { now, settlementAsset: 'USDT' },
+)
+assert.equal(bnbBuyOrder.side, 'BUY')
+assert.equal(bnbBuyOrder.symbol, 'BNBUSDT')
+assert.equal(bnbBuyOrder.quoteOrderQty, 7)
+const quantizedBnbOrder = buildExecutableOrder(
+  { source: 'USDT', target: 'BNB', amountUsd: 6.66, sourceQuantity: 6.66, rationale: 'lot-size regression fixture' },
+  bnbBuyAssets,
+  [agenticGroupMarket],
+  { symbol: 'BNBUSDT', price: 754, timestamp: new Date(now).toISOString() },
+  ['BNB'],
+  { now, settlementAsset: 'USDT' },
+)
+assert.equal(quantizedBnbOrder.quoteOrderQty, 6.66)
+assert.ok(Math.abs(quantizedBnbOrder.expectedTargetCredit - (0.008 * 0.999 * 0.999)) < 1e-12)
+const bnbBuyBinding = createApprovalBinding(bnbBuyOrder)
+bnbBuyBinding.approved = true
+assert.doesNotThrow(() => assertOrderSafeToSubmit(bnbBuyOrder, bnbBuyBinding, {
+  assets: bnbBuyAssets,
+  protectedAssets: ['BNB'],
+  currentPrice: { symbol: 'BNBUSDT', price: 756.26, timestamp: new Date(now).toISOString() },
+  account: agenticGroupAccount,
+  market: agenticGroupMarket,
+  exchangeInfoTimestamp: now,
+}))
+const unsupportedMarket = { ...agenticGroupMarket, permissions: [], permissionSets: undefined }
+assert.throws(() => buildExecutableOrder(
+  { source: 'USDT', target: 'BNB', amountUsd: 7, sourceQuantity: 7, rationale: 'unsupported permission fixture' },
+  bnbBuyAssets,
+  [unsupportedMarket],
+  { symbol: 'BNBUSDT', price: 756.26, timestamp: new Date(now).toISOString() },
+  [],
+  { now, settlementAsset: 'USDT' },
+), /permission|Spot/i)
 const exchangeCalls: string[] = []
 const fetchedExchangeInfo = await fetchExchangeSymbolInfo(async (toolName) => {
   exchangeCalls.push(toolName)

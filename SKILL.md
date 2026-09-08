@@ -13,7 +13,9 @@ Rokai turns a user's natural-language policy into a reviewable rule set, reads t
 
 ## Phase 4 implementation gate
 
-The deterministic execution-safety layer and supported-host wiring are implemented in `src/execution.ts` and `server/binanceExecutionAdapter.ts`, but live execution remains disabled by default (`ROKAI_LIVE_EXECUTION=false`) pending final safety review and a separately authorized funded test. With the default gate, no order is sent. Every run stops at `APPROVE <planId>` until the user explicitly approves the exact action shown in that run. The single production entry point is a server-owned trusted execution session: the caller supplies only the policy, named settlement asset, run ID, and exact approval text. The session reads the account, prices, and exchange info itself, calls the deterministic planner itself, stores the plan itself, and never accepts caller-supplied balances, prices, exchange filters, planner decisions, timestamps, thresholds, executors, or arbitrary orders. The store atomically grants one write claim for one approved Spot action; approvals do not count as writes, and a policy run may make at most three actual `spot.newOrder` attempts, with a fresh read and replan after each verified improving trade. One trade only needs to improve the policy state; it does not need to satisfy every active rule. This skill never performs recurring, unattended execution.
+The deterministic execution-safety layer is implemented in `src/execution.ts` and the host-mediated boundary in `server/rokaiHostMediated.ts`. The supported hackathon entry point is the parameterless `createRokaiHostMediatedSession()`: Codex owns the authenticated Binance MCP session and passes only the exact raw results of `spot.getAccount`, `spot.tickerPrice`, and `spot.exchangeInfo` into Rokai. Rokai owns normalization, deterministic planning, preflight, plan IDs, approval binding, and verification; it accepts no caller-supplied balances, prices, exchange filters, planner decisions, timestamps, thresholds, executors, credentials, or arbitrary orders. Live execution remains disabled by default (`ROKAI_LIVE_EXECUTION=false`). With the default gate, no order is sent. Every run stops at an explicit approval for the exact action shown in that run: for one valid active plan, the preferred human-facing forms are `approve` or `approve plan`; `APPROVE <planId>` remains available for explicit/manual approval. After approval, the host rereads state; if preflight still passes, Rokai returns one immutable exact `spot.newOrder` payload for the host to send verbatim, followed by `spot.getOrder` and fresh verification. The funded demo permits one real write; the general policy run state supports at most three actual writes, with a fresh read and replan after each verified improving trade. One trade only needs to improve the policy state; it does not need to satisfy every active rule. This skill never performs recurring, unattended execution.
+
+The first authorized funded test is recorded as proof of this guarded path, not as a five-of-five policy success: one `BNBUSDT` `BUY` `MARKET` order filled (`12562278904`, `0.00800000 BNB`, `6.02376000 USDT` cumulative quote), and fresh verification found BNB at `50.17%` against the `55%` target, so the run entered `MANUAL_REVIEW`. Exactly one write occurred, with no retry or automatic follow-up trade. No later live execution is claimed after the sizing correction.
 
 The public Rokai website remains a read-only explainer. A real state-changing call is allowed only when all of these conditions hold inside a supported Agent OS host:
 
@@ -49,7 +51,7 @@ Follow this sequence every time:
 
 ### 1. READ
 
-- Use the Binance Agent OS MCP connection supplied by the supported host.
+- Use the authenticated Binance Agent OS MCP connection supplied by the supported host. The host-mediated contract is the supported hackathon path; the old HTTP/OAuth adapter is a separate standalone compatibility path and is not used here.
 - Read the Agentic Spot account only. The read tool for account state is `spot.getAccount`.
 - Read the required market prices with `spot.tickerPrice`.
 - Read the exact Spot market and exchange constraints with `spot.exchangeInfo` before constructing an executable order.
@@ -118,23 +120,24 @@ Present an exact, reviewable approval request:
 - whether the plan satisfies every active rule;
 - a direct confirmation request such as: `Approve this exact Spot action?`.
 
-The authoritative run store accepts only the exact text `APPROVE <planId>` for the immediately displayed plan. A bare `Approve`, a general request such as “manage my portfolio”, “go ahead”, or “fix it”, or an approval for a different plan is rejected. The plan must still be pending, unexpired, unchanged, and bound to the immutable policy and protected-asset set. If the user changes any detail, invalidate the plan, recompute from fresh data, and ask again. One approval authorizes one action only.
+The authoritative run store accepts `approve`, `approve plan`, or `APPROVE <planId>` case-insensitively after trimming surrounding whitespace. Bare forms resolve internally to the one active plan for the current run; they are valid only when that plan is pending, unexpired, unchanged, not consumed or invalidated, and no competing plan exists. `APPROVE <planId>` is still checked against the stored active plan ID and rejects wrong or stale IDs. General requests such as “yes”, “go ahead”, “manage my portfolio”, or “fix it” are rejected. All forms create the same internal approval binding, and one approval authorizes one action only.
 
 ### 6. EXECUTE
 
-The supported-host adapter exposes only `spot.exchangeInfo`, `spot.getAccount`, `spot.tickerPrice`, `spot.newOrder`, and `spot.getOrder`. With `ROKAI_LIVE_EXECUTION=false` (the default), every write attempt fails closed before `spot.newOrder`; read-only analysis remains available. Do not call a write tool during structural tests. The adapter alone reads the fresh state, invokes the deterministic planner, constructs the order, binds it to the immutable run/plan hashes, and reaches the write boundary. Low-level order helpers are not production submission entry points.
+The supported-host contract exposes the read tools `spot.getAccount`, `spot.tickerPrice`, and `spot.exchangeInfo` to the Rokai skill, and permits the host to call `spot.newOrder` and `spot.getOrder` only as the authenticated transport after Rokai authorizes the exact payload. With `ROKAI_LIVE_EXECUTION=false` (the default), no write is reachable; read-only analysis remains available. Do not call a write tool during structural tests. The supported flow is `createRokaiHostMediatedSession()` → `startRun(policy, settlement, freshReads)` → `approve`, `approve plan`, or exact `APPROVE <planId>` → `approveAndPrepare(runId, approval, freshReads)` → host sends the returned payload verbatim → host supplies `spot.getOrder` and fresh reads to `verifyFilled`.
 
-When the gate is separately opened, the sanctioned Spot write tool is `spot.newOrder`. It requires `symbol`, `side` (`BUY` or `SELL`), and `type`; for a `MARKET` order it requires exactly one of `quantity` or `quoteOrderQty`. The deterministic layer constructs this payload; the host/model must not infer or edit it. A store-owned atomic claim permits only one write attempt for the approved plan, and the run allows at most three actual write attempts total. Do not invent a tool name or call a raw Binance API.
+Rokai constructs the payload internally from the fresh host results. It derives the symbol, orientation, side, order type, quantity mode, amount, filters, snapshot, expiry, and client order ID; the host/model must not infer, edit, or replace any of them. The session has no executor or credential parameter and exposes no raw submission function. A successful preparation authorizes one exact `MARKET` order only. The funded demo is limited to one write; the general run state allows at most three actual write attempts. Do not invent a tool name or call a raw Binance API.
 
-Before the call:
+Before the host call:
 
-- reread the Agentic Spot account and any required prices;
+- reread the Agentic Spot account, required prices, and exact exchange info;
 - confirm the approved symbol, side, order type, and exact quantity or quote value still match the latest state;
 - confirm the action is Spot-only and does not withdraw, transfer, borrow, leverage, or touch Futures/Margin/DeFi;
-- confirm the order is not larger than the live available balance and meets known minimums, fees, and symbol constraints;
-- make exactly one `spot.newOrder` call for the approved action.
+- confirm the order is not larger than the live free balance and meets known minimums, fees, and symbol constraints;
+- if any fresh state changes the approved intent, invalidate it, create a new plan ID, and require new approval;
+- make exactly one `spot.newOrder` call with the exact returned payload only.
 
-After calling it, treat only a clearly successful, structurally valid order response as an accepted execution. Require exact symbol, side, type, client order ID, order ID when supplied, original quantity mode and amount, executed quantity, cumulative quote quantity, and a `FILLED` status. Reconcile FULL-response fills and commissions paid in the source, target, or a third asset; if a third-asset fee cannot be reconciled, stop for manual review. Calculate the actual average fill price from executed quantity and cumulative quote quantity and reject verification when it exceeds the fixed MVP deviation limit. On a rejected request, insufficient funds, permission mismatch, timeout, unclear response, or any other error, fail closed: report that execution was not confirmed, do not retry the write, and do not make another trade.
+After calling it, pass the read-only `spot.getOrder` result and fresh account/price results to `verifyFilled`. Require exact symbol, side, type, client order ID, correlated order ID, original quantity mode and amount, executed quantity, cumulative quote quantity, and a `FILLED` status. Reconcile FULL-response fills and commissions paid in the source, target, or a third asset; if a third-asset fee cannot be reconciled, stop for manual review. Calculate the actual average fill price from executed quantity and cumulative quote quantity and reject verification when it exceeds the fixed MVP deviation limit. On a rejected request, insufficient funds, permission mismatch, timeout, unclear response, or any other error, fail closed: report that execution was not confirmed, do not retry the write, and do not make another trade.
 
 Never withdraw funds, transfer funds between wallets, enable or use Futures, Margin, DeFi, x402, or smart-contract actions. Never add a second action without a new approval. The deterministic layer marks an uncertain transport result as `UNKNOWN`, performs at most one read-only `spot.getOrder` lookup, and never retries the write.
 
@@ -186,7 +189,9 @@ BTC untouched ✓
 
 After verification, replan from fresh state if any rule remains.
 
-APPROVE <planId>
+approve
+
+(`APPROVE <planId>` remains available for explicit/manual approval.)
 
 Approve this action?
 ```

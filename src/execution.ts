@@ -31,6 +31,7 @@ export type ExchangeSymbolInfo = {
   status?: string
   isSpotTradingAllowed?: boolean
   permissions?: string[]
+  permissionSets?: string[][]
   filters?: ExchangeFilter[]
   baseAssetPrecision?: number
   quoteAssetPrecision?: number
@@ -117,8 +118,10 @@ export type SubmissionContext = {
 
 export type SpotMcpExecutor = (toolName: string, args: Record<string, unknown>) => Promise<unknown>
 
+export const ROKAI_APPROVAL_TTL_MS = 5 * 60_000
+
 const executionSafetyConfig = Object.freeze({
-  approvalTtlMs: 60_000,
+  approvalTtlMs: ROKAI_APPROVAL_TTL_MS,
   maxPriceAgeMs: 15_000,
   maxPriceDeviationBps: 50,
   feeRate: 0.001,
@@ -252,6 +255,33 @@ function parseFilter(value: unknown): ExchangeFilter {
   return filter
 }
 
+function isRecognizedTradingGroup(permission: string) {
+  const match = /^TRD_GRP_(\d{3})$/.exec(permission)
+  if (!match) return false
+  const group = Number(match[1])
+  return (group >= 2 && group <= 25) || (group >= 49 && group <= 258)
+}
+
+function normalizePermissions(value: unknown, label: string) {
+  if (!Array.isArray(value) || value.some((permission) => typeof permission !== 'string')) {
+    throw new ExecutionSafetyError('INVALID_ACCOUNT', `${label} are malformed or missing.`)
+  }
+  return [...new Set((value as string[]).map((permission) => permission.toUpperCase()))]
+}
+
+function marketHasSpotPermission(market: ExchangeSymbolInfo, accountPermissions?: string[]) {
+  const marketPermissions = new Set((market.permissions ?? []).map((permission) => permission.toUpperCase()))
+  if (accountPermissions === undefined) {
+    if (marketPermissions.has('SPOT')) return true
+    const permissionSets = market.permissionSets ?? []
+    return permissionSets.length > 0 && permissionSets.every((permissionSet) => permissionSet.includes('SPOT'))
+  }
+  const account = new Set(accountPermissions.map((permission) => permission.toUpperCase()))
+  if (marketPermissions.has('SPOT') && account.has('SPOT')) return true
+  const permissionSets = market.permissionSets ?? []
+  return permissionSets.length > 0 && permissionSets.every((permissionSet) => permissionSet.some((permission) => account.has(permission)))
+}
+
 export function normalizeExchangeSymbolInfo(payload: unknown, requestedSymbol?: string): ExchangeSymbolInfo {
   const value = unwrapMcpPayload(payload)
   const symbols = isRecord(value) && Array.isArray(value.symbols) ? value.symbols : Array.isArray(value) ? value : [value]
@@ -280,6 +310,12 @@ export function normalizeExchangeSymbolInfo(payload: unknown, requestedSymbol?: 
     if (!Array.isArray(permissions) || permissions.some((permission: unknown) => typeof permission !== 'string')) throw new ExecutionSafetyError('INVALID_EXCHANGE_INFO', 'Exchange market permissions are invalid.')
     result.permissions = (permissions as string[]).map((permission) => permission.toUpperCase())
   }
+  if (entry.permissionSets !== undefined) {
+    if (!Array.isArray(entry.permissionSets) || entry.permissionSets.length === 0 || entry.permissionSets.some((permissionSet: unknown) => !Array.isArray(permissionSet) || permissionSet.length === 0 || permissionSet.some((permission: unknown) => typeof permission !== 'string'))) {
+      throw new ExecutionSafetyError('INVALID_EXCHANGE_INFO', 'Exchange market permission sets are invalid.')
+    }
+    result.permissionSets = (entry.permissionSets as unknown[][]).map((permissionSet) => (permissionSet as string[]).map((permission) => permission.toUpperCase()))
+  }
   if (entry.filters !== undefined) {
     if (!Array.isArray(entry.filters)) throw new ExecutionSafetyError('INVALID_EXCHANGE_INFO', 'Exchange filters are invalid.')
     result.filters = entry.filters.map(parseFilter)
@@ -307,10 +343,10 @@ function resolveMarket(source: string, target: string, markets: ExchangeSymbolIn
   return matches[0]
 }
 
-function validateMarket(market: ExchangeSymbolInfo) {
+function validateMarket(market: ExchangeSymbolInfo, accountPermissions?: string[]) {
   if (market.status !== 'TRADING') throw new ExecutionSafetyError('MARKET_UNAVAILABLE', `Spot market ${market.symbol} is not trading.`)
   if (market.isSpotTradingAllowed !== true) throw new ExecutionSafetyError('MARKET_UNAVAILABLE', `Spot trading is not explicitly allowed for ${market.symbol}.`)
-  if (!market.permissions?.includes('SPOT')) throw new ExecutionSafetyError('MARKET_UNAVAILABLE', `${market.symbol} does not explicitly permit Spot trading.`)
+  if (!marketHasSpotPermission(market, accountPermissions)) throw new ExecutionSafetyError('MARKET_UNAVAILABLE', `${market.symbol} does not expose verifiable Spot permission for this account.`)
 }
 
 function balanceFree(asset: Asset) {
@@ -331,7 +367,11 @@ function findAsset(assets: Asset[], symbol: string) {
 
 function marketConstraints(market: ExchangeSymbolInfo) {
   const filters = market.filters ?? []
-  const lot = filters.find((filter) => filter.filterType === 'MARKET_LOT_SIZE') ?? filters.find((filter) => filter.filterType === 'LOT_SIZE')
+  const isUsableLotFilter = (filter: ExchangeFilter | undefined) => Boolean(filter
+    && filter.minQty !== undefined && filter.maxQty !== undefined && filter.stepSize !== undefined
+    && filter.minQty > 0 && filter.maxQty > 0 && filter.stepSize > 0)
+  const marketLot = filters.find((filter) => filter.filterType === 'MARKET_LOT_SIZE')
+  const lot = isUsableLotFilter(marketLot) ? marketLot : filters.find((filter) => filter.filterType === 'LOT_SIZE' && isUsableLotFilter(filter))
   const notionalFilters = filters.filter((filter) => filter.filterType === 'NOTIONAL' || filter.filterType === 'MIN_NOTIONAL')
   if (!lot || lot.minQty === undefined || lot.maxQty === undefined || lot.stepSize === undefined || lot.minQty <= 0 || lot.maxQty <= 0 || lot.stepSize <= 0) throw new ExecutionSafetyError('EXCHANGE_FILTER', 'Required Spot quantity filters are missing or invalid.')
   const applicableNotionalFilters = notionalFilters.filter((filter) => filter.applyToMarket !== false && filter.applyMinToMarket !== false)
@@ -347,8 +387,8 @@ function marketConstraints(market: ExchangeSymbolInfo) {
   }
 }
 
-function validateMarketForOrder(order: ExecutableOrder, market: ExchangeSymbolInfo) {
-  validateMarket(market)
+function validateMarketForOrder(order: ExecutableOrder, market: ExchangeSymbolInfo, accountPermissions?: string[]) {
+  validateMarket(market, accountPermissions)
   if (normalizeSymbol(market.symbol, 'Exchange symbol') !== order.symbol || normalizeSymbol(market.baseAsset, 'Base asset') !== order.baseAsset || normalizeSymbol(market.quoteAsset, 'Quote asset') !== order.quoteAsset) {
     throw new ExecutionSafetyError('MARKET_MISMATCH', 'Fresh exchange information does not match the approved order.')
   }
@@ -429,7 +469,12 @@ export function buildExecutableOrder(
     const rawQuoteOrderQty = plannedSourceQuantity
     quoteOrderQty = quantizeDown(rawQuoteOrderQty, undefined, quotePrecision)
     validateOrderAmount(quoteOrderQty, free, `${sourceAsset} quote amount`)
-    const estimatedQuantity = quoteOrderQty / marketPrice
+    // Binance executes a quote-sized BUY in base units, then applies the
+    // symbol's lot step. Model that final executable quantity, not the raw
+    // quote/price estimate, so policy projections match the order Binance can
+    // actually fill.
+    const estimatedQuantity = quantizeDown(quoteOrderQty / marketPrice, filters.stepSize, precision)
+    if (!Number.isFinite(estimatedQuantity) || estimatedQuantity <= 0) throw new ExecutionSafetyError('INVALID_ORDER', `${targetAsset} quantity is not positive after exchange quantization.`)
     if (filters.minQty !== undefined && estimatedQuantity < filters.minQty) throw new ExecutionSafetyError('EXCHANGE_FILTER', 'The order is below Binance minimum quantity.')
     if (filters.maxQty !== undefined && estimatedQuantity > filters.maxQty) throw new ExecutionSafetyError('EXCHANGE_FILTER', 'The order exceeds Binance maximum quantity.')
     if (quoteOrderQty < filters.minNotional) throw new ExecutionSafetyError('EXCHANGE_FILTER', 'The order is below Binance minimum notional.')
@@ -500,15 +545,21 @@ function consumeApproval(binding: ApprovalBinding, order: ExecutableOrder, nowMs
   return binding
 }
 
-export function validateSpotAccountForExecution(payload: unknown) {
+export function validateSpotAccountForExecution(payload: unknown, market?: ExchangeSymbolInfo) {
   const value = unwrapMcpPayload(payload)
   if (!isRecord(value)) throw new ExecutionSafetyError('INVALID_ACCOUNT', 'Binance returned an invalid Spot account response.')
   if (typeof value.accountType !== 'string' || value.accountType.toUpperCase() !== 'SPOT') throw new ExecutionSafetyError('ACCOUNT_SCOPE', 'Only a Spot account may be used for Rokai execution.')
   if (value.canTrade !== true) throw new ExecutionSafetyError('PERMISSION_DENIED', 'Binance Spot trading permission is not enabled.')
   if (value.tradeAllowed !== undefined && value.tradeAllowed !== true) throw new ExecutionSafetyError('PERMISSION_DENIED', 'Binance Spot trade permission is not enabled.')
   if (value.spotTradingAllowed !== undefined && value.spotTradingAllowed !== true) throw new ExecutionSafetyError('PERMISSION_DENIED', 'Binance Spot trading is not allowed.')
-  if (!Array.isArray(value.permissions) || value.permissions.some((permission) => typeof permission !== 'string')) throw new ExecutionSafetyError('INVALID_ACCOUNT', 'Binance account permissions are malformed or missing.')
-  if (!(value.permissions as string[]).map((permission) => permission.toUpperCase()).includes('SPOT')) throw new ExecutionSafetyError('PERMISSION_DENIED', 'Binance account does not expose Spot permission.')
+  const permissions = value.permissions === undefined ? [] : normalizePermissions(value.permissions, 'Binance account permissions')
+  const metadataPermissions = ['tradingGroup', 'tradingGroupId', 'accountTradingGroup']
+    .flatMap((key) => typeof value[key] === 'string' ? [value[key]!.toUpperCase()] : [])
+  const accountPermissions = [...new Set([...permissions, ...metadataPermissions])]
+  const hasDirectSpotPermission = accountPermissions.includes('SPOT')
+  const hasRecognizedTradingGroup = accountPermissions.some(isRecognizedTradingGroup)
+  if (!hasDirectSpotPermission && !hasRecognizedTradingGroup) throw new ExecutionSafetyError('PERMISSION_DENIED', 'Binance account does not expose verifiable Spot trading capability.')
+  if (market && !marketHasSpotPermission(market, accountPermissions)) throw new ExecutionSafetyError('PERMISSION_DENIED', `${market.symbol} does not expose Spot permission for the authorized account.`)
   let agenticMarker: boolean | undefined
   for (const key of ['isAgentic', 'agentic'] as const) {
     if (value[key] !== undefined) {
@@ -523,7 +574,11 @@ export function validateSpotAccountForExecution(payload: unknown) {
     agenticMarker = true
   }
   if (agenticMarker === false) throw new ExecutionSafetyError('ACCOUNT_SCOPE', 'The account is not the expected Agentic Spot account.')
-  return { agenticIdentity: agenticMarker === true ? 'explicit' as const : 'unavailable' as const }
+  return {
+    agenticIdentity: agenticMarker === true ? 'explicit' as const : 'unavailable' as const,
+    accountPermissions,
+    spotPermission: hasDirectSpotPermission ? 'SPOT' as const : 'TRADING_GROUP' as const,
+  }
 }
 
 function assertFreshPrice(order: ExecutableOrder, currentPrice: PriceSnapshot, nowMs: number, maxPriceAgeMs: number, maxDeviationBps: number) {
@@ -542,15 +597,14 @@ export function assertOrderSafeToSubmit(order: ExecutableOrder, binding: Approva
   if (order.type !== 'MARKET' || (order.quantity === undefined && order.quoteOrderQty === undefined) || (order.quantity !== undefined && order.quoteOrderQty !== undefined)) throw new ExecutionSafetyError('INVALID_ORDER', 'The executable order is not an exact Spot market order.')
   assertFreshPrice(order, context.currentPrice, nowMs, executionSafetyConfig.maxPriceAgeMs, executionSafetyConfig.maxPriceDeviationBps)
   if (context.account === undefined) throw new ExecutionSafetyError('INVALID_ACCOUNT', 'A fresh Spot account response is required before submission.')
-  validateSpotAccountForExecution(context.account)
   if (context.market === undefined || context.exchangeInfoTimestamp === undefined) throw new ExecutionSafetyError('EXCHANGE_FILTER', 'Fresh Spot exchange information is required before submission.')
-  validateMarketForOrder(order, context.market)
+  const accountValidation = validateSpotAccountForExecution(context.account, context.market)
+  validateMarketForOrder(order, context.market, accountValidation.accountPermissions)
   const exchangeInfoMs = timestampValue(context.exchangeInfoTimestamp, 'Exchange information timestamp')
   const maxDataAgeMs = executionSafetyConfig.maxPriceAgeMs
   if (exchangeInfoMs > nowMs || nowMs - exchangeInfoMs > maxDataAgeMs) throw new ExecutionSafetyError('STALE_EXCHANGE_INFO', 'Spot exchange information is stale or from the future.')
   const protectedSet = new Set((context.protectedAssets ?? []).map((asset) => normalizeSymbol(asset, 'Protected asset')))
   if (protectedSet.has(order.sourceAsset)) throw new ExecutionSafetyError('PROTECTED_ASSET', `${order.sourceAsset} is protected and cannot be debited.`)
-  if (protectedSet.has('BNB')) throw new ExecutionSafetyError('FEE_ASSET_UNCERTAIN', 'A protected BNB balance cannot be exposed to an unproven Binance fee debit.')
   const source = findAsset(context.assets, order.sourceAsset)
   if (!source) throw new ExecutionSafetyError('MISSING_BALANCE', `No current balance was read for ${order.sourceAsset}.`)
   if (order.expectedSourceDebit > balanceFree(source) + 1e-12) throw new ExecutionSafetyError('INSUFFICIENT_FUNDS', `Available free ${order.sourceAsset} balance is insufficient for the approved order.`)

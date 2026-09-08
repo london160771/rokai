@@ -236,9 +236,9 @@ export type BinanceAgentOsHttpContext = {
 }
 
 /**
- * The production execution adapter obtains its MCP executor through this
- * server-owned OAuth/session path. Callers provide HTTP context, never a tool
- * executor or Binance credentials.
+ * Standalone HTTP/OAuth compatibility path. The supported Codex hackathon
+ * runtime does not use this function; it passes host-owned MCP read results to
+ * createRokaiHostMediatedSession instead.
  */
 export async function createRokaiAgentOsMcpConnection(options: BinanceAgentOsHttpContext) {
   const session = getSession(options.request, options.response)
