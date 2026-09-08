@@ -67,7 +67,7 @@ function numeric(value: unknown, label: string) {
   return result
 }
 
-type LiveBalance = { symbol: string; quantity: number }
+export type LiveBalance = { symbol: string; free: number; locked: number; quantity: number }
 
 export function normalizeSpotBalances(payload: unknown): LiveBalance[] {
   const value = unwrapMcpPayload(payload)
@@ -81,10 +81,12 @@ export function normalizeSpotBalances(payload: unknown): LiveBalance[] {
     if (!isRecord(entry) || typeof entry.asset !== 'string') throw new Error('Binance returned a malformed Spot balance.')
     const symbol = entry.asset.trim().toUpperCase()
     if (!/^[A-Z][A-Z0-9]{1,11}$/.test(symbol)) throw new Error('Binance returned a malformed asset symbol.')
-    const quantity = entry.free !== undefined || entry.locked !== undefined
-      ? numeric(entry.free ?? 0, `${symbol} free balance`) + numeric(entry.locked ?? 0, `${symbol} locked balance`)
-      : numeric(entry.quantity, `${symbol} balance`)
-    return { symbol, quantity }
+    const locked = entry.locked !== undefined ? numeric(entry.locked, `${symbol} locked balance`) : 0
+    const total = entry.quantity === undefined ? undefined : numeric(entry.quantity, `${symbol} balance`)
+    if (total !== undefined && locked > total + 1e-12) throw new Error(`Binance returned an invalid ${symbol} balance.`)
+    const free = entry.free !== undefined ? numeric(entry.free, `${symbol} free balance`) : total === undefined ? 0 : total - locked
+    if (!Number.isFinite(free + locked)) throw new Error(`Binance returned an invalid ${symbol} balance.`)
+    return { symbol, free, locked, quantity: free + locked }
   }).filter((balance) => balance.quantity > 0)
 }
 
@@ -119,6 +121,8 @@ export function normalizeLivePortfolio(balancePayload: unknown, pricePayload: un
     symbol: balance.symbol,
     name: assetNames[balance.symbol] ?? balance.symbol,
     quantity: balance.quantity,
+    free: balance.free,
+    locked: balance.locked,
     priceUsd: stablecoinSymbols.has(balance.symbol) ? 1 : prices.get(`${balance.symbol}USDT`)!,
     change24h: 0,
     kind: stablecoinSymbols.has(balance.symbol) ? 'stablecoin' : coreSymbols.has(balance.symbol) ? 'core' : 'altcoin',
@@ -204,19 +208,48 @@ function createOAuthProvider(session: BinanceSession, options: { publicUrl?: str
   }
 }
 
-async function createMcpToolExecutor(options: { mcpUrl: string; session: BinanceSession; publicUrl?: string; clientMetadataUrl?: string; redirectUrl?: string }): Promise<{ executor: McpToolExecutor; close: () => Promise<void> }> {
+async function createMcpToolExecutor(options: { mcpUrl: string; session: BinanceSession; publicUrl?: string; clientMetadataUrl?: string; redirectUrl?: string; allowSpotExecution?: boolean }): Promise<{ executor: McpToolExecutor; close: () => Promise<void> }> {
   if (!options.session.tokens) throw new UnauthorizedError('Binance authorization is required.')
   const provider = createOAuthProvider(options.session, options)
   const transport = new StreamableHTTPClientTransport(new URL(options.mcpUrl), { authProvider: provider })
   const client = new Client({ name: 'rokai', version: '0.1.0' })
   await client.connect(transport)
+  const liveWriteEnabled = options.allowSpotExecution === true && process.env.ROKAI_LIVE_EXECUTION?.trim().toLowerCase() === 'true'
+  const allowedTools = new Set(liveWriteEnabled
+    ? ['spot.getAccount', 'spot.tickerPrice', 'spot.exchangeInfo', 'spot.newOrder', 'spot.getOrder']
+    : ['spot.getAccount', 'spot.tickerPrice'])
   return {
     executor: async (toolName, args) => {
-      if (toolName !== 'spot.getAccount' && toolName !== 'spot.tickerPrice') throw new Error('Rokai only permits read-only Binance Spot tools in Phase 3.5.')
+      if (!allowedTools.has(toolName)) throw new Error('Rokai does not permit this Binance tool.')
       return client.callTool({ name: toolName, arguments: args })
     },
     close: () => client.close(),
   }
+}
+
+export type BinanceAgentOsHttpContext = {
+  request: { headers: { cookie?: string } }
+  response: { setHeader: (name: string, value: string) => void }
+  publicUrl?: string
+  clientMetadataUrl?: string
+  redirectUrl?: string
+}
+
+/**
+ * The production execution adapter obtains its MCP executor through this
+ * server-owned OAuth/session path. Callers provide HTTP context, never a tool
+ * executor or Binance credentials.
+ */
+export async function createRokaiAgentOsMcpConnection(options: BinanceAgentOsHttpContext) {
+  const session = getSession(options.request, options.response)
+  return createMcpToolExecutor({
+    mcpUrl: officialBinanceMcpUrl,
+    session,
+    publicUrl: options.publicUrl,
+    clientMetadataUrl: options.clientMetadataUrl,
+    redirectUrl: options.redirectUrl,
+    allowSpotExecution: true,
+  })
 }
 
 export function binanceAgentOsApi(options: { mcpUrl?: string; publicUrl?: string; clientMetadataUrl?: string; redirectUrl?: string }): Plugin {

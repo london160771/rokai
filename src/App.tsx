@@ -26,7 +26,7 @@ const workflow = [
   { number: '01', title: 'Read', copy: 'Use Binance Agent OS to read Spot balances and the prices needed to value them.' },
   { number: '02', title: 'Interpret', copy: 'Turn plain-English policy into one of five explicit, reviewable rule types.' },
   { number: '03', title: 'Evaluate', copy: 'Run deterministic portfolio math to find exactly what is satisfied or broken.' },
-  { number: '04', title: 'Plan', copy: 'Calculate the smallest reasonable corrective action without touching protected assets.' },
+  { number: '04', title: 'Plan', copy: 'Choose one safest next trade without touching protected assets.' },
   { number: '05', title: 'Approve', copy: 'Show the exact asset, side, amount, and expected before → after result.' },
   { number: '06', title: 'Execute → Verify', copy: 'After approval, use sanctioned Spot tools, then reread and recalculate everything.' },
 ]
@@ -37,7 +37,7 @@ const setupSteps = [
   { number: '03', title: 'Connect your host', copy: 'Connect Binance Agent OS / MCP inside Codex or another supported host.', code: 'Binance Agent OS / MCP' },
   { number: '04', title: 'Invoke Rokai', copy: 'Call the reusable skill by name whenever you want a policy check.', code: '$rokai' },
   { number: '05', title: 'State your policy', copy: 'Describe what must remain true in plain English.', code: 'Use Rokai. Keep at least 40% in USDC, never sell BTC, and don’t let any altcoin exceed 20%.' },
-  { number: '06', title: 'Review the result', copy: 'Rokai reads, evaluates, plans, and asks for approval. Execution is only possible after approval when that phase is enabled.', code: 'READ → EVALUATE → PLAN → APPROVE' },
+  { number: '06', title: 'Review the result', copy: 'Rokai reads, evaluates, plans, and asks for approval. The skill can execute only behind its explicit server-side gate.', code: 'READ → EVALUATE → PLAN → APPROVE → VERIFY' },
 ]
 
 const requirements = [
@@ -47,7 +47,7 @@ const requirements = [
   'Binance Agentic account',
 ]
 
-const nextSteps = ['User Policy', 'Rokai', 'Binance Agent OS', 'Portfolio Check', 'Proposed Action', 'User Approval', 'Execution', 'Verification']
+const nextSteps = ['Analyze all rules', 'Propose 1 trade', 'Approve', 'Execute', 'Verify', 'Replan if needed']
 
 function App() {
   return (
@@ -86,9 +86,9 @@ function App() {
             <div className="demo-rule"><span className="rule-state is-alert">×</span><div><strong>SOL Exposure</strong><small>Current 31% · Maximum 20%</small></div><b>ATTENTION</b></div>
           </div>
           <div className="demo-plan">
-            <div className="demo-plan-heading"><span>PROPOSED ACTION</span><span>1 ACTION</span></div>
+            <div className="demo-plan-heading"><span>PROPOSED ACTION</span><span>NEXT TRADE</span></div>
             <strong>Sell $800 SOL <i>→</i> USDC</strong>
-            <p>Smallest corrective action. BTC remains untouched.</p>
+            <p>Safest next trade. BTC remains untouched.</p>
             <div className="demo-after"><span>Expected result</span><b>USDC 40.1% <Check size={13} /></b><b>SOL 19.9% <Check size={13} /></b></div>
           </div>
           <div className="demo-approval"><LockKeyhole size={14} /> Approval is required before any state-changing action.</div>
@@ -117,8 +117,32 @@ function App() {
         </div>
       </section>
 
+      <section className="current-mvp-section section" id="current-mvp">
+        <div className="section-heading reveal-item"><div className="section-label"><span>03</span><span>CURRENT MVP</span></div><h2>One trade. Fresh state. No silent drift.</h2><p>Rokai analyzes the full policy, proposes one safest next trade, and keeps the next decision tied to a fresh verified account state.</p></div>
+        <div className="mvp-grid">
+          <div className="mvp-summary reveal-item">
+            <ul className="mvp-list">
+              <li><Check size={15} /><span>Supports up to five portfolio rule types in the current MVP.</span></li>
+              <li><Check size={15} /><span>Analyzes all active rules together before choosing the next trade.</span></li>
+              <li><Check size={15} /><span>Requires a fresh explicit approval for every trade, with at most three writes per run.</span></li>
+              <li><Check size={15} /><span>Rereads Binance data and replans from scratch after each verified trade.</span></li>
+              <li><Check size={15} /><span>Stops safely on uncertainty, stale state, partial fills, duplicate actions, or no progress.</span></li>
+            </ul>
+            <p className="mvp-host-note"><Terminal size={14} /> Execution happens through Rokai as a Codex / Agent OS skill, never directly in this browser page.</p>
+          </div>
+          <div className="mvp-demo-card reveal-item reveal-delay-1">
+            <div className="mvp-card-heading"><span>PLANNED DEMO</span><span>10 USDT START</span></div>
+            <h3>10 USDT <i>→</i> BNB</h3>
+            <div className="mvp-balance-row"><div><small>STARTING PORTFOLIO</small><strong>10 USDT</strong></div><div><small>BNB BALANCE</small><strong>0 BNB</strong></div></div>
+            <p className="mvp-demo-policy">“Keep at least 55% in BNB, keep at least 40% in USDT, never sell BNB, no altcoin above 60%, and always keep at least 4 USDT.”</p>
+            <div className="mvp-order"><span>EXPECTED NEXT TRADE</span><strong>BUY BNBUSDT <i>·</i> MARKET</strong><small>Rokai shows the exact plan ID, then waits for <code>APPROVE &lt;planId&gt;</code>. Only an explicitly enabled skill path can execute it.</small></div>
+            <p className="mvp-demo-note">The actual result depends on live filters, fees, price, and slippage. No fixed BNB amount is promised.</p>
+          </div>
+        </div>
+      </section>
+
       <section className="architecture-section section reveal-item" id="architecture">
-        <div className="section-label"><span>03</span><span>AGENT-FIRST ARCHITECTURE</span></div>
+        <div className="section-label"><span>04</span><span>AGENT-FIRST ARCHITECTURE</span></div>
         <div className="architecture-copy"><h2>The website explains Rokai.<br /><em>The skill does the work.</em></h2><p>Rokai is designed to run inside a supported Agent OS host such as Codex, where Binance authorization and MCP access are already part of the host environment.</p></div>
         <div className="architecture-flow" aria-label="Rokai architecture">
           <div><span className="flow-icon"><Command size={17} /></span><b>User</b><small>Sets the rule</small></div><i /><div><span className="flow-icon"><Zap size={17} /></span><b>Rokai Skill</b><small>Checks & plans</small></div><i /><div><span className="flow-icon"><Network size={17} /></span><b>Supported Host</b><small>Codex or similar</small></div><i /><div><span className="flow-icon"><LockKeyhole size={17} /></span><b>Binance Agent OS / MCP</b><small>Agentic account</small></div>
@@ -126,12 +150,12 @@ function App() {
       </section>
 
       <section className="rules-section section" id="rules">
-        <div className="section-heading reveal-item"><div className="section-label"><span>04</span><span>SUPPORTED MVP RULES</span></div><h2>Small rule set. Clear behavior.</h2></div>
+        <div className="section-heading reveal-item"><div className="section-label"><span>05</span><span>SUPPORTED MVP RULES</span></div><h2>Small rule set. Clear behavior.</h2></div>
         <div className="rules-grid">{supportedRules.map((rule, index) => <article className={`rule-card reveal-item reveal-delay-${Math.min(index + 1, 3)}`} key={rule.number}><span>{rule.number}</span><h3>{rule.title}</h3><p>{rule.example}</p></article>)}</div>
       </section>
 
       <section className="how-to-section section" id="how-to-use">
-        <div className="section-heading reveal-item"><div className="section-label"><span>05</span><span>HOW TO USE ROKAI</span></div><h2>Setup once. Then speak naturally.</h2><p>Rokai is a reusable skill inside your supported host—not a separate trading website.</p></div>
+        <div className="section-heading reveal-item"><div className="section-label"><span>06</span><span>HOW TO USE ROKAI</span></div><h2>Setup once. Then speak naturally.</h2><p>Rokai is a reusable skill inside your supported host—not a separate trading website.</p></div>
         <div className="setup-grid">
           {setupSteps.map((step, index) => <article className={`setup-card reveal-item reveal-delay-${Math.min(index + 1, 3)}`} key={step.number}>
             <span className="workflow-number">{step.number}</span><h3>{step.title}</h3><p>{step.copy}</p><code>{step.code}</code>
@@ -140,20 +164,20 @@ function App() {
       </section>
 
       <section className="requirements-section section reveal-item" id="requirements">
-        <div className="requirements-heading"><div className="section-label"><span>06</span><span>REQUIREMENTS</span></div><div><h2>Four pieces. One clear path.</h2><p>Keep the runtime small and the source of truth visible.</p></div></div>
+        <div className="requirements-heading"><div className="section-label"><span>07</span><span>REQUIREMENTS</span></div><div><h2>Four pieces. One clear path.</h2><p>Keep the runtime small and the source of truth visible.</p></div></div>
         <div className="requirements-list">{requirements.map((item) => <div key={item}><Check size={15} /><span>{item}</span></div>)}</div>
       </section>
 
       <section className="next-section section" id="next">
-        <div className="section-heading reveal-item"><div className="section-label"><span>07</span><span>WHAT HAPPENS NEXT</span></div><h2>From one sentence to a verified policy.</h2><p>Every step stays visible. Every action stays behind your approval.</p></div>
-        <div className="next-flow reveal-item reveal-delay-1" aria-label="Rokai workflow from user policy to verification">
+        <div className="section-heading reveal-item"><div className="section-label"><span>08</span><span>WHAT HAPPENS NEXT</span></div><h2>One approval at a time.</h2><p>Every step stays visible. Every action stays behind your approval.</p></div>
+        <div className="next-flow reveal-item reveal-delay-1" aria-label="Rokai sequential workflow">
           {nextSteps.map((step, index) => <div className="next-flow-item" key={step}><span>{String(index + 1).padStart(2, '0')}</span><strong>{step}</strong>{index < nextSteps.length - 1 && <i aria-hidden="true">→</i>}</div>)}
         </div>
-        <div className="read-only-note"><LockKeyhole size={14} /> Current demo: read-only. Execution is future-gated and never happens without explicit approval.</div>
+        <div className="read-only-note"><LockKeyhole size={14} /> Execution runs through the Rokai skill, not this browser page. Live writes are disabled by default and always require explicit approval.</div>
       </section>
 
       <section className="video-section section reveal-item" id="demo-video">
-        <div className="section-heading"><div className="section-label"><span>08</span><span>SEE ROKAI IN ACTION</span></div><h2>A calm path from intent to action.</h2><p>The final demo recording will live here. No external video is embedded.</p></div>
+        <div className="section-heading"><div className="section-label"><span>09</span><span>SEE ROKAI IN ACTION</span></div><h2>A calm path from intent to action.</h2><p>The final demo recording will live here. No external video is embedded.</p></div>
         <div className="video-placeholder" aria-label="Demo video placeholder">
           <div className="video-placeholder-mark"><Play size={20} fill="currentColor" /></div>
           <div><span>VIDEO PLACEHOLDER</span><strong>Add the final Rokai demo here.</strong><small>Supported-host workflow · read-only demo</small></div>
@@ -161,7 +185,7 @@ function App() {
       </section>
 
       <section className="safety-section section reveal-item">
-        <div className="safety-callout"><div className="section-label"><span>09</span><span>SAFETY MODEL</span></div><div><h2>Read first. Ask clearly. Act only with approval.</h2><p>Gemini interprets language only. Rokai owns the calculations. Binance Agent OS supplies account and market data. The current demo does not execute real trades.</p></div></div>
+        <div className="safety-callout"><div className="section-label"><span>10</span><span>SAFETY MODEL</span></div><div><h2>Read first. Ask clearly. Act only with approval.</h2><p>Gemini interprets language only. Rokai owns the calculations. Binance Agent OS supplies account and market data. The browser is informational; the skill keeps live writes disabled by default and verifies every approved fill.</p></div></div>
         <div className="safety-list"><span><Check size={14} /> No invented balances or prices</span><span><Check size={14} /> Protected assets stay protected</span><span><Check size={14} /> No withdrawals or transfers</span></div>
       </section>
 

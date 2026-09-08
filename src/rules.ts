@@ -1,4 +1,5 @@
 import type { Asset } from './mockData.js'
+import { planNextTrade } from './nextTradePlanner.js'
 
 export type Rule =
   | { kind: 'min_stablecoin'; asset: string; minPct: number }
@@ -37,6 +38,8 @@ export type Plan = {
 }
 
 const stablecoinSymbols = new Set(['USDC', 'USDT', 'BUSD', 'FDUSD', 'DAI', 'USDE'])
+const planningBufferPct = 0.5
+const planningBufferUsd = 1
 
 export function valuePortfolio(assets: Asset[]): { totalUsd: number; assets: ValuedAsset[] } {
   const valued = assets.map((asset) => ({
@@ -136,21 +139,28 @@ export function evaluateRules(assets: Asset[], policy: Policy): RuleResult[] {
   })
 }
 
-export function buildPlan(assets: Asset[], policy: Policy): Plan {
+/**
+ * Retained for compatibility with the original preview fixtures. New callers
+ * should use buildPlan, which now returns the single next-trade projection.
+ */
+export function buildMultiActionPlan(assets: Asset[], policy: Policy): Plan {
   const { totalUsd, assets: valued } = valuePortfolio(assets)
   const protectedSymbols = new Set(
-    policy.rules.filter((rule) => rule.kind === 'protected_asset').map((rule) => rule.asset),
+    policy.rules.filter((rule) => rule.kind === 'protected_asset').map((rule) => rule.asset.toUpperCase()),
   )
   const minStablecoin = policy.rules.find((rule) => rule.kind === 'min_stablecoin')
   const minStablecoinAmount = policy.rules.find((rule) => rule.kind === 'min_stablecoin_amount')
   const minAllocations = policy.rules.filter((rule) => rule.kind === 'min_asset_allocation')
-  const maxAltcoin = policy.rules.find(
-    (rule): rule is Extract<Rule, { kind: 'max_asset_exposure' }> => rule.kind === 'max_asset_exposure' && rule.asset === 'altcoins',
+  const maxExposureRules = policy.rules.filter(
+    (rule): rule is Extract<Rule, { kind: 'max_asset_exposure' }> => rule.kind === 'max_asset_exposure',
   )
   const actions: PlanAction[] = []
   const warnings: string[] = []
 
-  if (!totalUsd) return { actions, warnings: ['A portfolio value is required.'], estimatedResults: [], safe: false }
+  if (!Number.isFinite(totalUsd) || totalUsd <= 0) return { actions, warnings: ['A portfolio value is required.'], estimatedResults: [], safe: false }
+  if (assets.some((asset) => !Number.isFinite(asset.quantity) || asset.quantity < 0 || !Number.isFinite(asset.priceUsd) || asset.priceUsd <= 0)) {
+    return { actions, warnings: ['Every asset requires a finite non-negative balance and a valid price.'], estimatedResults: [], safe: false }
+  }
 
   const stableSymbols = [minStablecoin?.asset, minStablecoinAmount?.asset].filter((symbol): symbol is string => Boolean(symbol))
   const stableAsset = stableSymbols[0]
@@ -183,7 +193,8 @@ export function buildPlan(assets: Asset[], policy: Policy): Plan {
       warnings.push(`${rule.asset} is not present, so its minimum allocation cannot be planned safely.`)
       continue
     }
-    const needed = Math.max(0, (rule.minPct / 100) * totalUsd - target.valueUsd)
+    const bufferedTarget = ((rule.minPct + planningBufferPct) / 100) * totalUsd
+    const needed = Math.max(0, bufferedTarget - target.valueUsd)
     if (!needed) continue
     const sellers = current.assets
       .filter((asset) => asset.symbol !== target.symbol && !protectedSymbols.has(asset.symbol))
@@ -196,19 +207,25 @@ export function buildPlan(assets: Asset[], policy: Policy): Plan {
     if (remaining > 1) warnings.push(`Available unprotected balances cannot fully fund the ${rule.asset} allocation target.`)
   }
 
-  if (maxAltcoin) {
+  if (maxExposureRules.length) {
     if (!stableAsset) {
-      warnings.push('A stablecoin target is required to safely trim maximum altcoin exposure.')
+      warnings.push('A stablecoin target is required to safely trim maximum asset exposure.')
     } else {
-      const maxValue = (maxAltcoin.maxPct / 100) * totalUsd
-      for (const asset of valuePortfolio(working).assets.filter((item) => item.kind === 'altcoin' && item.valueUsd > maxValue)) {
-        if (protectedSymbols.has(asset.symbol)) {
-          warnings.push(`${asset.symbol} is protected but exceeds the maximum altcoin exposure.`)
-          continue
+      for (const maxExposure of maxExposureRules) {
+        const currentAssets = valuePortfolio(working).assets
+        const matching = maxExposure.asset === 'altcoins'
+          ? currentAssets.filter((item) => item.kind === 'altcoin')
+          : [findAsset(currentAssets, maxExposure.asset)].filter((asset): asset is ValuedAsset => Boolean(asset))
+        const maxValue = (Math.max(0, maxExposure.maxPct - planningBufferPct) / 100) * totalUsd
+        for (const asset of matching.filter((item) => item.valueUsd > maxValue)) {
+          if (protectedSymbols.has(asset.symbol)) {
+            warnings.push(`${asset.symbol} is protected but exceeds the maximum asset exposure.`)
+            continue
+          }
+          const amountUsd = asset.valueUsd - maxValue
+          const moved = addConversion(asset.symbol, stableAsset, amountUsd, `Trim ${asset.symbol} to below the ${maxExposure.maxPct}% exposure limit.`)
+          if (moved < amountUsd - 1) warnings.push(`Available ${asset.symbol} balance cannot fully satisfy its exposure limit.`)
         }
-        const amountUsd = asset.valueUsd - maxValue
-        const moved = addConversion(asset.symbol, stableAsset, amountUsd, `Trim ${asset.symbol} to the ${maxAltcoin.maxPct}% altcoin exposure limit.`)
-        if (moved < amountUsd - 1) warnings.push(`Available ${asset.symbol} balance cannot fully satisfy its exposure limit.`)
       }
     }
   }
@@ -218,8 +235,8 @@ export function buildPlan(assets: Asset[], policy: Policy): Plan {
       warnings.push('A stablecoin asset is required for the stablecoin target.')
     } else {
       const stableTarget = Math.max(
-        minStablecoin ? (minStablecoin.minPct / 100) * totalUsd : 0,
-        minStablecoinAmount?.minAmount ?? 0,
+        minStablecoin ? ((minStablecoin.minPct + planningBufferPct) / 100) * totalUsd : 0,
+        minStablecoinAmount ? minStablecoinAmount.minAmount + planningBufferUsd : 0,
       )
       const current = valuePortfolio(working)
       const stable = findAsset(current.assets, stableAsset)
@@ -238,8 +255,13 @@ export function buildPlan(assets: Asset[], policy: Policy): Plan {
 
   if (actions.some((action) => action.amountUsd < 10)) warnings.push('An exchange minimum notional may block a small conversion.')
   const finalAssets = valuePortfolio(working)
+  const finalResults = evaluateRules(working, policy)
   const estimatedStable = stableAsset ? findAsset(finalAssets.assets, stableAsset) : undefined
   const estimatedStablePct = totalUsd && estimatedStable ? (estimatedStable.valueUsd / totalUsd) * 100 : 0
+  if (actions.length === 0) warnings.push('No executable action was produced.')
+  if (actions.length > 1) warnings.push('This plan requires multiple actions and cannot be approved as one executable order.')
+  if (actions.some((action) => protectedSymbols.has(action.source.toUpperCase()))) warnings.push('The plan attempts to sell a protected asset.')
+  if (finalResults.some((result) => !result.passed)) warnings.push('The simulated post-state does not satisfy every active rule.')
 
   return {
     actions,
@@ -248,10 +270,42 @@ export function buildPlan(assets: Asset[], policy: Policy): Plan {
       ...(stableAsset ? [`${stableAsset} estimated allocation: ${estimatedStablePct.toFixed(1)}%`] : []),
       ...(minStablecoinAmount && estimatedStable ? [`${stableAsset} estimated balance: $${estimatedStable.valueUsd.toFixed(2)}`] : []),
       ...minAllocations.map((rule) => `${rule.asset} minimum allocation: ${rule.minPct}%`),
-      maxAltcoin ? `Protected assets preserved: ${[...protectedSymbols].join(', ') || 'none'}` : 'Protected assets are never sold',
-      'Simulation uses fixture prices and zero additional slippage.',
+      ...(maxExposureRules.length ? [`Protected assets preserved: ${[...protectedSymbols].join(', ') || 'none'}`] : ['Protected assets are never sold']),
+      'Simulation includes deterministic safety buffers for policy boundaries.',
     ],
-    safe: warnings.length === 0,
+    safe: actions.length === 1 && warnings.length === 0 && finalResults.every((result) => result.passed),
+  }
+}
+
+/**
+ * Compatibility shape for older consumers. The authoritative planner is
+ * planNextTrade and this function deliberately exposes at most one action.
+ */
+export function buildPlan(assets: Asset[], policy: Policy): Plan {
+  const decision = planNextTrade(assets, policy)
+  if (decision.status === 'COMPLETE') {
+    return {
+      actions: [],
+      warnings: [],
+      estimatedResults: ['All active rules are already satisfied.'],
+      safe: false,
+    }
+  }
+  if (decision.status === 'STOP') {
+    return {
+      actions: [],
+      warnings: [decision.reason],
+      estimatedResults: [],
+      safe: false,
+    }
+  }
+
+  const allExpectedRulesPass = decision.expectedRuleResults.every((result) => result.passed)
+  return {
+    actions: [decision.nextTrade],
+    warnings: allExpectedRulesPass ? [] : ['This is the safest next trade; unresolved rules require a later planning step.'],
+    estimatedResults: decision.expectedRuleResults.map((result) => result.detail),
+    safe: allExpectedRulesPass,
   }
 }
 
@@ -270,7 +324,8 @@ export function parseDemoPolicy(text: string): { policy: Policy | null; error?: 
   const amountMatches = [...normalized.matchAll(/(?:ALWAYS\s+)?KEEP\s+(?:(?:AT LEAST|A\s+MINIMUM\s+OF|MINIMUM(?: OF)?)\s+)?\$?([\d,]+(?:\.\d+)?)\s+([A-Z][A-Z0-9]{1,11})/g)]
   const protectedMatches = [...normalized.matchAll(/(?:NEVER|DO NOT)\s+SELL\s+([A-Z][A-Z0-9]{1,11})/g)]
   const maxMatches = [...normalized.matchAll(/(?:ANY\s+)?ALTCOIN(?:S)?\s+(?:EXCEED|ABOVE|OVER)\s+(\d+(?:\.\d+)?)%/g)]
-  const anyAssetMatches = [...normalized.matchAll(/NO\s+ASSET(?:S)?\s+(?:EXCEED|ABOVE|OVER)\s+(\d+(?:\.\d+)?)%/g)]
+  const specificMaxMatches = [...normalized.matchAll(/NO\s+(?!ALTCOINS?\b|ASSETS?\b)([A-Z][A-Z0-9]{1,11})\s+(?:EXCEED|ABOVE|OVER)\s+(\d+(?:\.\d+)?)%/g)]
+  const ambiguousMaxMatches = [...normalized.matchAll(/NO\s+ASSETS?\s+(?:EXCEED|ABOVE|OVER)\s+(\d+(?:\.\d+)?)%/g)]
   const rules: Rule[] = []
   allocationMatches.forEach((match) => {
     const minPct = Number(match[1])
@@ -283,7 +338,8 @@ export function parseDemoPolicy(text: string): { policy: Policy | null; error?: 
   aboveAllocationMatches.forEach((match) => rules.push({ kind: 'min_asset_allocation', asset: match[1], minPct: Number(match[2]) }))
   protectedMatches.forEach((match) => rules.push({ kind: 'protected_asset', asset: match[1] }))
   maxMatches.forEach((match) => rules.push({ kind: 'max_asset_exposure', asset: 'altcoins', maxPct: Number(match[1]) }))
-  anyAssetMatches.forEach((match) => rules.push({ kind: 'max_asset_exposure', asset: 'altcoins', maxPct: Number(match[1]) }))
+  specificMaxMatches.forEach((match) => rules.push({ kind: 'max_asset_exposure', asset: match[1], maxPct: Number(match[2]) }))
+  if (ambiguousMaxMatches.length) return { policy: null, error: 'Maximum exposure rules must specify altcoins or a named asset.' }
   if (rules.length === 0) return { policy: null, error: 'Try the demo sentence or one of the examples below.' }
   if (rules.some((rule) => rule.kind === 'min_stablecoin_amount' && !stablecoinSymbols.has(rule.asset))) {
     return { policy: null, error: 'Fixed minimum amount rules must name a supported stablecoin.' }

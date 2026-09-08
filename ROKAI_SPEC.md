@@ -6,7 +6,7 @@ Rokai is an AI portfolio policy agent for Binance Agent OS.
 
 **Tagline:** AI that follows your rules, not the market hype.
 
-Users state what must remain true in plain English. Rokai parses the request, checks current holdings, proposes the smallest compliant action, asks for approval, and verifies the result.
+Users state what must remain true in plain English. Rokai parses the request, checks current holdings, proposes one safest next trade at a time, asks for approval, and verifies the result.
 
 ## Current agent-first architecture
 
@@ -18,7 +18,7 @@ The supported runtime path is:
 User -> Rokai Skill -> Supported Agent OS Host -> Binance Agent OS / MCP -> Agentic Account
 ```
 
-Binance currently rejects arbitrary custom OAuth clients with error `3346001`. Direct custom OAuth is not a supported Rokai product path; the website must not imply otherwise. The current demo remains read-only and real execution is deferred to the explicitly approved execution phase.
+Binance currently rejects arbitrary custom OAuth clients with error `3346001`. Direct custom OAuth is not a supported Rokai product path; the website must not imply otherwise. The current website demo remains read-only, while the supported-host execution wiring is implemented behind an explicit default-off gate. Any funded test remains separately authorized.
 
 ## MVP scope
 
@@ -31,7 +31,7 @@ Included:
 - Maximum asset exposure.
 - Binance Agent OS/MCP for real balances and live market data through the supported-host skill path, with an Agentic sub-account.
 - A public landing page that explains the skill architecture; it does not authenticate or control Binance directly.
-- Guarded execution only as a future, explicitly approved phase.
+- Guarded sequential Spot execution wiring is implemented behind `ROKAI_LIVE_EXECUTION=false`; enabling it remains a separately approved safety decision.
 
 Excluded: chat UI, complex dashboards, Futures, Margin, DeFi, x402, smart contracts, and 24/7 monitoring.
 
@@ -45,8 +45,9 @@ The website is a public visual explainer. The actual product flow runs inside a 
 4. Rokai reads Agentic Spot data and calculates compliance deterministically.
 5. Rokai shows satisfied/violated rules and the smallest explainable plan.
 6. User explicitly approves the displayed plan.
-7. In the current demo, execution is blocked. A future approved execution phase may use sanctioned Spot tools only.
-8. Any future execution must reread the account and verify every rule before claiming success.
+7. The supported-host execution path accepts one exact `APPROVE <planId>` per trade, atomically claims one write for that plan, and allows a maximum of three actual `spot.newOrder` attempts per run.
+8. After every verified trade, Rokai rereads the account and prices, invalidates the old plan, and creates a fresh next-trade plan and approval when rules remain.
+9. With `ROKAI_LIVE_EXECUTION=false` (the default), no state-changing tool is reachable; the current demo remains read-only.
 
 ## UX
 
@@ -64,7 +65,7 @@ Supported Agent OS Host
   -> Portfolio Adapter (mock fixtures | Binance Agent OS/MCP)
   -> Deterministic Rule Engine
   -> Deterministic Planner
-  -> [future approved phase] Guarded Spot execution
+  -> Guarded Spot execution wiring (disabled by default)
   -> Verification (fresh portfolio + Rule Engine)
 ```
 
@@ -73,6 +74,20 @@ Recommended stack: Vite/React, TypeScript, and the existing Binance Agent OS/MCP
 ### Phase 3 live-data boundary
 
 Phase 3 is read-only. The server-side Binance Agent OS/MCP adapter may call only `spot.getAccount` for the Agentic Spot account and `spot.tickerPrice` for the required `ASSETUSDT` pairs. It normalizes those responses into the existing `Asset` shape before the deterministic rule engine runs. No Futures, Margin, order, convert, transfer, or account-mutating tool is available through this adapter.
+
+### Phase 4 supported-host execution boundary
+
+Phase 4 wiring connects the deterministic execution layer to the single trusted `createRokaiExecutionSession(...)` server/host entry point. Its allowlist contains exactly five tools: `spot.exchangeInfo`, `spot.getAccount`, `spot.tickerPrice`, `spot.newOrder`, and `spot.getOrder`. The sequential state machine is `READING → PLANNING → AWAITING_APPROVAL → SUBMITTING → VERIFYING → COMPLETE | MANUAL_REVIEW`; it owns one active plan at a time. The trusted adapter receives only policy, settlement, run, and exact approval inputs. It reads fresh account, prices, and exchange info, invokes `planNextTrade` internally, creates the plan and exact order internally, and accepts no caller-supplied balances, prices, exchange filters, planner decisions, timestamps, thresholds, executor, or arbitrary order authority. It performs fresh exchange/account/price preflight and submits at most one exact `MARKET` order per exact approval through an atomic store-owned write claim. Approval count is not write count; a run permits at most three actual `spot.newOrder` attempts. `spot.newOrder` is gated only by the server environment variable `ROKAI_LIVE_EXECUTION`, which defaults to `false`, so the repository's structural tests cannot perform a write. Unknown tools and all transfers, withdrawals, Futures, Margin, staking, and other writes are rejected.
+
+After a future `FILLED` response, Rokai rereads the account and required prices, correlates the exact order identity and FULL-response quantities/fills, reconciles source/target/BNB commissions, calculates actual average fill price from executed and cumulative quote quantities, checks source/target and protected-asset deltas, recalculates the complete original policy, and only then marks the step successful. Zero-balance policy targets may be absent from `omitZeroBalances` data and are evaluated as zero; source balances remain strict. If rules remain and the score improves before the three-write limit, the old plan is invalidated and a new plan ID requires fresh approval. Ordinary bounded price movement does not itself create a duplicate; only a prior actual semantic write or loop/no-progress rule does. Uncertain, partial, mismatched, stale, excessive-slippage, unpriced, or non-improving outcomes stop in `MANUAL_REVIEW`; there is no automatic write retry. If an account payload exposes an Agentic identity marker, it must be valid; if no such marker is provided, Rokai reports that limitation and relies on explicit Spot/account/trading checks rather than guessing.
+
+### Planned tiny funded demo
+
+The planned demo starts with a Binance Agentic Spot account containing `10 USDT` and `0 BNB`, then applies:
+
+> Keep at least 55% in BNB, keep at least 40% in USDT, never sell BNB, no altcoin above 60%, and always keep at least 4 USDT.
+
+The expected first decision is one direct `BNBUSDT` `MARKET BUY`. Rokai shows the exact plan ID, waits for `APPROVE <planId>`, makes no write while the gate is false, and—only in a separately authorized enabled run—submits that one order before verifying and recalculating all five rules. The exact quantity and result depend on live Binance filters, fees, price, and slippage; the demo does not promise a fixed BNB amount. After a verified fill, any remaining issue requires a fresh read, fresh plan, and fresh approval.
 
 ## Rule schema
 
@@ -102,18 +117,18 @@ Parsing must normalize symbols, percentages, and synonyms, return confidence/err
 - Minimum asset allocation rule passes when the named asset allocation is at least `minPct`.
 - Protected-asset rule passes when no plan sells that asset.
 - Maximum-exposure rule passes when the relevant asset or altcoin allocation is at most `maxPct`.
-- Planning must respect protected assets, available balances, exchange filters, minimum notional/quantity, fees, and configurable slippage tolerance.
+- Planning must return exactly one safest next trade when possible; one trade may improve the violation score without satisfying all rules, and the next step is always a fresh replan. It must respect protected assets, free (not locked) source balances, zero-value target assets, exchange filters, minimum notional/quantity, fees, and the fixed MVP slippage tolerance.
 - If a compliant plan cannot be calculated safely, show “Unable to plan safely” and do not execute.
 
-The planner should prefer the fewest Spot/Convert actions needed to restore the rules. All amounts and assumptions must be visible before approval.
+The planner should prefer the fewest supported Spot actions needed to restore the rules. All amounts and assumptions must be visible before approval.
 
 ## Skill and data modes
 
-**Supported-host skill mode** is the product path. The host owns the supported Binance Agent OS/MCP connection and authorization. `SKILL.md` requests only Agentic Spot balances and required market prices for the current read-only demo, then passes them through the existing deterministic engine.
+**Supported-host skill mode** is the product path. The host owns the supported Binance Agent OS/MCP connection and authorization. `SKILL.md` requests Agentic Spot balances and required market prices, then passes them through the existing deterministic engine; the supported-host execution adapter is separately gated and disabled by default.
 
 **Mock fixtures** remain available to test the deterministic parser, rule engine, and planner without account access. They must be labeled as mock and never presented as live Binance data.
 
-The former direct website Live Mode/OAuth flow is not a supported Rokai product path. Binance currently rejects arbitrary custom OAuth clients with error `3346001`, so the landing page does not expose Connect Binance, Live Mode, or simulated execution controls. The existing server-side adapters remain isolated for reference and future approved integration work; they are not linked from the website.
+The former direct website Live Mode/OAuth flow is not a supported Rokai product path. Binance currently rejects arbitrary custom OAuth clients with error `3346001`, so the landing page does not expose Connect Binance, Live Mode, or simulated execution controls. The server-side read and execution adapters remain isolated from the website and are used only through the supported-host path; the execution adapter is disabled by default.
 
 ## Edge cases and safety
 
@@ -127,7 +142,7 @@ Fail closed: parsing uncertainty, stale data, missing permissions, or any mismat
 - The natural-language example and the supported fixtures produce the five structured MVP rules.
 - The Rokai skill checks rules, identifies violations, and creates an explainable plan using supported-host data or clearly labeled fixtures.
 - Calculations and trade sizing are deterministic and testable without Gemini or Binance.
-- Live integration is isolated, permission-aware, approval-gated, and never the default.
+- Live integration is isolated behind one trusted adapter, permission-aware, approval-gated, and never the default. The adapter constructs the order from a fresh internally planned snapshot and cannot be given an arbitrary executor or order by its caller.
 - The public page clearly explains the workflow and works without a chat interface; operational loading, empty, error, and success states belong to the supported-host skill runtime.
 
 ## Phased implementation plan
@@ -140,7 +155,7 @@ Fail closed: parsing uncertainty, stale data, missing permissions, or any mismat
 6. **Binance:** Agent OS/MCP read adapters, permissions, live data, Agentic sub-account configuration.
 7. **Phase 3.5 — Direct MCP connectivity:** connect the server-side adapter directly to Binance's official MCP endpoint with OAuth/PKCE; keep the integration read-only and server-side.
 8. **Agent-first restructure:** make `SKILL.md` the central product workflow and reduce the website to a transparent public landing page. No direct custom OAuth or real execution is presented.
-9. **Execution:** only after explicit approval, with sanctioned Spot tools and post-action verification.
+9. **Phase 4 — Supported-host execution wiring:** connect the deterministic execution layer to the allowlisted Spot tools, state store, approval binding, gate, verification, and sequential replanning. Live execution remains disabled by default pending final safety review.
 10. **Demo hardening:** polish, error handling, build/deploy verification, and the supported-host demo checklist.
 
 ## Vercel deployment

@@ -7,7 +7,7 @@
     "dev": "node node_modules/vite/bin/vite.js",
     "build": "node node_modules/vite/bin/vite.js build",
     "start": "node node_modules/vite/bin/vite.js preview --host 0.0.0.0",
-    "test": "node --experimental-strip-types --experimental-loader ./tests/ts-extensionless-loader.mjs tests/policy-parser.test.ts && node --experimental-strip-types --experimental-loader ./tests/ts-extensionless-loader.mjs tests/live-data.test.ts",
+    "test": "node --experimental-strip-types --experimental-loader ./tests/ts-extensionless-loader.mjs tests/policy-parser.test.ts && node --experimental-strip-types --experimental-loader ./tests/ts-extensionless-loader.mjs tests/live-data.test.ts && node --experimental-strip-types --experimental-loader ./tests/ts-extensionless-loader.mjs tests/execution-safety.test.ts && node --experimental-strip-types --experimental-loader ./tests/ts-extensionless-loader.mjs tests/next-trade-planner.test.ts && node --experimental-strip-types --experimental-loader ./tests/ts-extensionless-loader.mjs tests/policy-run-state.test.ts && node --experimental-strip-types --experimental-loader ./tests/ts-extensionless-loader.mjs tests/execution-hardening.test.ts && node --experimental-strip-types --experimental-loader ./tests/ts-extensionless-loader.mjs tests/execution-adapter.test.ts",
     "typecheck": "node node_modules/typescript/bin/tsc -b",
     "preview": "node node_modules/vite/bin/vite.js preview"
   },

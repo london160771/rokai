@@ -22,6 +22,10 @@ assert.deepEqual(rulesFor({ maxAssetPercent: 20 }), [
   { kind: 'max_asset_exposure', asset: 'altcoins', maxPct: 20 },
 ])
 
+assert.deepEqual(rulesFor({ maxAssetExposure: { asset: 'SOL', maxPct: 20 } }), [
+  { kind: 'max_asset_exposure', asset: 'SOL', maxPct: 20 },
+])
+
 assert.deepEqual(rulesFor({ minStablecoinAmount: { asset: 'USDC', minAmount: 1000 } }), [
   { kind: 'min_stablecoin_amount', asset: 'USDC', minAmount: 1000 },
 ])
@@ -47,6 +51,7 @@ assert.deepEqual(rulesFor(combinedStructured), [
   { kind: 'max_asset_exposure', asset: 'altcoins', maxPct: 20 },
 ])
 assert.deepEqual(detectExpectedRuleTypes(combinedText), ['minStablecoinPercent', 'protectedAssets', 'maxAssetPercent', 'minStablecoinAmount', 'minAssetAllocation'])
+assert.deepEqual(detectExpectedRuleTypes('No SOL above 20%.'), ['maxAssetExposure'])
 assert.deepEqual(missingRuleTypes(combinedText, { minStablecoinPercent: 40, minStablecoinAsset: 'USDC' }), ['protectedAssets', 'maxAssetPercent', 'minStablecoinAmount', 'minAssetAllocation'])
 
 const minimumAmount = parseDemoPolicy('Always keep at least 1,000 USDC.').policy
@@ -62,6 +67,9 @@ assert.ok(parseDemoPolicy('Keep at least 40% in USDC.').policy)
 assert.ok(parseDemoPolicy('Never sell BTC.').policy)
 assert.ok(parseDemoPolicy('No altcoin above 20%.').policy)
 assert.ok(parseDemoPolicy("Keep 40% in USDC, never sell BTC, and no altcoin above 20%.").policy)
+assert.deepEqual(parseDemoPolicy('No SOL above 20%.').policy?.rules, [{ kind: 'max_asset_exposure', asset: 'SOL', maxPct: 20 }])
+assert.equal(parseDemoPolicy('No asset above 20%.').policy, null)
+assert.equal(normalizeStructuredPolicy({ minStablecoinPercent: 40 }, 'fixture').policy, null)
 assert.equal(parseDemoPolicy('Buy more ETH whenever the market dips.').policy, null)
 assert.equal(parseDemoPolicy('Always keep at least 1,000 BTC.').policy, null)
 
@@ -107,10 +115,10 @@ assert.equal(allocationResult[0].passed, false)
 assert.equal(allocationResult[0].currentPct?.toFixed(1), '14.6')
 
 const combinedPlan = buildPlan(mockAssets, normalizeStructuredPolicy(combinedStructured, 'fixture').policy!)
-assert.equal(combinedPlan.safe, true)
-assert.ok(combinedPlan.actions.some((action) => action.target === 'BTC'))
-assert.ok(combinedPlan.actions.some((action) => action.target === 'USDC'))
-assert.ok(evaluateRules(applyPlan(mockAssets, combinedPlan), normalizeStructuredPolicy(combinedStructured, 'fixture').policy!).every((result) => result.passed))
+assert.equal(combinedPlan.actions.length, 1)
+assert.equal(combinedPlan.safe, false)
+assert.equal(combinedPlan.actions[0].target, 'USDC')
+assert.ok(evaluateRules(applyPlan(mockAssets, combinedPlan), normalizeStructuredPolicy(combinedStructured, 'fixture').policy!).some((result) => !result.passed))
 
 for (const invalid of [
   { minStablecoinPercent: 101 },
@@ -119,6 +127,8 @@ for (const invalid of [
   { minStablecoinAmount: { asset: 'USDC', minAmount: -1 } },
   { minAssetAllocation: { asset: 'BTC', minPct: 101 } },
   { minAssetAllocation: { asset: 'BTC' } },
+  { maxAssetExposure: { asset: 'USDC', maxPct: 20 } },
+  { maxAssetExposure: { asset: 'SOL', maxPct: 101 } },
   { protectedAssets: ['BTC/USD'] },
   { unsupportedRule: 20 },
   { ambiguous: true, reason: 'Conflicting constraints.' },

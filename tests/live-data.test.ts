@@ -25,6 +25,8 @@ assert.deepEqual(normalized.assets.map((asset) => [asset.symbol, asset.quantity,
   ['BTC', 0.01, 70000],
   ['ETH', 1.25, 3000],
 ])
+assert.equal(normalized.assets[0].free, 500)
+assert.equal(normalized.assets[0].locked, 10)
 const total = normalized.assets.reduce((sum, asset) => sum + asset.quantity * asset.priceUsd, 0)
 assert.equal(total, 4960)
 assert.equal((normalized.assets[1].quantity * normalized.assets[1].priceUsd / total * 100).toFixed(1), '14.1')

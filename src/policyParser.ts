@@ -7,6 +7,7 @@ export type StructuredPolicy = {
   minAssetAllocation?: { asset: string; minPct: number }
   protectedAssets?: string[]
   maxAssetPercent?: number
+  maxAssetExposure?: { asset: string; maxPct: number }
   ambiguous?: boolean
   reason?: string
 }
@@ -30,6 +31,7 @@ const allowedFields = new Set([
   'minAssetAllocation',
   'protectedAssets',
   'maxAssetPercent',
+  'maxAssetExposure',
   'ambiguous',
   'reason',
 ])
@@ -116,6 +118,9 @@ export function normalizeStructuredPolicy(value: unknown, sourceText: string): N
   if (hasMinAsset && !hasMinPercent) {
     return { policy: null, error: 'Gemini returned a stablecoin without a minimum percentage.' }
   }
+  if (hasMinPercent && !hasMinAsset) {
+    return { policy: null, error: 'A minimum stablecoin percentage must name the stablecoin explicitly.' }
+  }
 
   let minStablecoinAmount: { asset: string; minAmount: number } | undefined
   if (value.minStablecoinAmount !== undefined) {
@@ -158,13 +163,26 @@ export function normalizeStructuredPolicy(value: unknown, sourceText: string): N
     return { policy: null, error: 'Maximum exposure percentages must be between 0% and 100%.' }
   }
 
+  let maxAssetExposure: { asset: string; maxPct: number } | undefined
+  if (value.maxAssetExposure !== undefined) {
+    if (!isRecord(value.maxAssetExposure) || Object.keys(value.maxAssetExposure).some((key) => !['asset', 'maxPct'].includes(key))) {
+      return { policy: null, error: 'Gemini returned an invalid maximum exposure rule.' }
+    }
+    const rawAsset = typeof value.maxAssetExposure.asset === 'string' ? value.maxAssetExposure.asset.trim().toUpperCase() : ''
+    const asset = rawAsset === 'ALTCOINS' ? 'altcoins' : normalizeSymbol(rawAsset)
+    if (!asset || (asset !== 'altcoins' && stablecoinSymbols.has(asset))) return { policy: null, error: 'Maximum exposure rules must name a non-stablecoin asset or altcoins.' }
+    if (!validPercent(value.maxAssetExposure.maxPct)) return { policy: null, error: 'Maximum exposure percentages must be between 0% and 100%.' }
+    maxAssetExposure = { asset, maxPct: value.maxAssetExposure.maxPct }
+  }
+
   const rules: Rule[] = []
-  const minStablecoinAsset = hasMinAsset ? normalizeSymbol(value.minStablecoinAsset)! : 'USDC'
-  if (hasMinPercent) rules.push({ kind: 'min_stablecoin', asset: minStablecoinAsset, minPct: value.minStablecoinPercent as number })
+  const minStablecoinAsset = hasMinAsset ? normalizeSymbol(value.minStablecoinAsset)! : undefined
+  if (hasMinPercent && minStablecoinAsset) rules.push({ kind: 'min_stablecoin', asset: minStablecoinAsset, minPct: value.minStablecoinPercent as number })
   if (minStablecoinAmount) rules.push({ kind: 'min_stablecoin_amount', ...minStablecoinAmount })
   if (minAssetAllocation) rules.push({ kind: 'min_asset_allocation', ...minAssetAllocation })
   protectedAssets.forEach((asset) => rules.push({ kind: 'protected_asset', asset }))
   if (hasMaxPercent) rules.push({ kind: 'max_asset_exposure', asset: 'altcoins', maxPct: value.maxAssetPercent as number })
+  if (maxAssetExposure) rules.push({ kind: 'max_asset_exposure', ...maxAssetExposure })
 
   if (!rules.length) return { policy: null, error: 'No supported rules were found. Try a minimum stablecoin, protected asset, or maximum exposure rule.' }
 
@@ -177,6 +195,7 @@ export function normalizeStructuredPolicy(value: unknown, sourceText: string): N
   if (minAssetAllocation) structured.minAssetAllocation = minAssetAllocation
   if (protectedAssets.length) structured.protectedAssets = protectedAssets
   if (hasMaxPercent) structured.maxAssetPercent = value.maxAssetPercent as number
+  if (maxAssetExposure) structured.maxAssetExposure = maxAssetExposure
 
   return { policy: { rules, sourceText }, structured }
 }

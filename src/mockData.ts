@@ -2,6 +2,8 @@ export type Asset = {
   symbol: string
   name: string
   quantity: number
+  free?: number
+  locked?: number
   priceUsd: number
   change24h: number
   kind: 'stablecoin' | 'core' | 'altcoin'
