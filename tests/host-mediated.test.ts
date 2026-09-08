@@ -160,6 +160,34 @@ process.env.ROKAI_LIVE_EXECUTION = 'true'
   assert.equal(uncertain.receipt?.status, 'UNKNOWN')
 }
 
+// Regression: approval may be accepted while the host is still preparing its
+// write. If the host delay crosses expiry, the exact payload must not be
+// released and a new deterministic plan is required instead.
+{
+  const { session, runId, planId } = start()
+  const activePlan = session.getActivePlan(runId)
+  assert.ok(activePlan)
+  const expiry = activePlan!.expiresAt
+  const validNow = expiry - 1_000
+  const originalDateNowForExpiry = Date.now
+  let dateCalls = 0
+  Date.now = () => {
+    dateCalls += 1
+    return dateCalls < 7 ? validNow : expiry + 1
+  }
+  try {
+    const expired = session.approveAndPrepare(runId, `APPROVE ${planId}`, reads())
+    assert.equal(expired.submission, undefined)
+    assert.match(expired.error ?? '', /PLAN_EXPIRED/i)
+    assert.equal(expired.state.status, 'AWAITING_APPROVAL')
+    let writeCount = 0
+    if (expired.submission) writeCount += 1
+    assert.equal(writeCount, 0)
+  } finally {
+    Date.now = originalDateNowForExpiry
+  }
+}
+
 if (originalLiveGate === undefined) delete process.env.ROKAI_LIVE_EXECUTION
 else process.env.ROKAI_LIVE_EXECUTION = originalLiveGate
 

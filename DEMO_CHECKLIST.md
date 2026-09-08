@@ -24,8 +24,8 @@ Use a supported Agent OS host such as Codex. The website is only the public expl
 - No tokens, API keys, account identifiers, or sensitive balances are shown in the public website.
 - The public landing page is available and clearly says it is an explainer.
 - If Binance access is unavailable, use the deterministic mock fixtures in the repository and label them as mock; never present them as live.
-- For repeated host runs, start `npm run rokai -- --ready` once from the canonical checkout. Keep that process alive between plan creation, approval, and verification; do not restart it while an approval is pending.
-- Confirm the Ready Mode response reports `runtimeLoaded: true` and the effective `ROKAI_LIVE_EXECUTION` value. It reports the required host read tools as `awaiting-host-read`; a successful policy start proves the authenticated host reads were supplied. No account balances are prewarmed or cached.
+- For repeated host runs, start `npm run --silent rokai -- --ready` once from the canonical checkout. Keep that process alive between plan creation, approval, and verification; do not restart it while an approval is pending. Use the repo-owned `npm run --silent rokai:request -- --runtime-directory "<transport.requestDirectory>" --capability "<transport.capability>" "<request-input-file>"` helper; it uses the capability-bound runtime-owned `<requestId>.request.json` → `<requestId>.response.json` file transport for host-mediated JSON. Do not create a PowerShell/Node bridge, named pipe, or network listener.
+- Confirm the Ready Mode response reports `runtimeLoaded: true`, the effective `ROKAI_LIVE_EXECUTION` value, a request directory, and a per-process capability. It reports the required host read tools as `awaiting-host-read`; a successful policy start proves the authenticated host reads were supplied. No account balances are prewarmed or cached, and valid exchange metadata may be reused for 45 seconds without resending the permission matrix.
 
 ## Verified first funded execution
 
@@ -86,6 +86,7 @@ The actual order quantity and result depend on live Binance filters, fees, price
 - The exact proposed action must be displayed before approval.
 - The current read-only demo stops before any host write because `ROKAI_LIVE_EXECUTION=false`; state clearly that no order was sent. The host must never invent or edit the returned order payload.
 - Never claim rules were restored without a fresh post-action reread and recalculation.
+- Check plan expiry immediately before executable payload release. An expired plan cannot be revived; require a fresh deterministic plan and fresh approval.
 - After the verified fill above, the sizing logic was updated to apply final `LOT_SIZE` / `MARKET_LOT_SIZE` quantization before approval, model fees and slippage, recalculate the expected post-trade state from the executable quantity, and round up only when reserve, filter, and sizing constraints permit.
 
 ## Phase 4 structural execution checks

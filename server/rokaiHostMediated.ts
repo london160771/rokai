@@ -87,6 +87,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function safeError(error: unknown) {
+  if (error instanceof PolicyRunStateError) return `${error.code}: ${error.message}`
   return error instanceof Error ? error.message : 'The supported Binance host did not provide usable data.'
 }
 
@@ -187,7 +188,17 @@ function internalApprovedBinding(plan: ActivePlan) {
   }
 }
 
+function assertPlanNotExpired(plan: ActivePlan) {
+  const now = Date.now()
+  if (!Number.isFinite(now)) throw new PolicyRunStateError('INVALID_TIME', 'The trusted execution clock is unavailable.')
+  if (now >= plan.expiresAt) throw new PolicyRunStateError('PLAN_EXPIRED', 'The approval plan expired before the executable order payload was released.')
+}
+
 function preflightStoredPlan(run: PolicyRunState, plan: ActivePlan, reads: HostFreshBinanceReads) {
+  // Approval can be accepted before a host read or transport delay. Expiry is
+  // checked at the start of preflight and again immediately before payload
+  // release below; it must never be deferred to post-trade verification.
+  assertPlanNotExpired(plan)
   const order = storedOrder(plan, run)
   const planning = readPlanningState(run.originalPolicy, order.quoteAsset, reads)
   const marketState = readMarket(reads, order.symbol)
@@ -317,6 +328,12 @@ export function createRokaiHostMediatedSession(): RokaiHostMediatedSession {
         const plan = store.getActivePlan(runId)
         if (!plan) throw new Error('The approved plan is no longer active.')
         const fresh = preflightStoredPlan(run, plan, reads)
+        const latestPlan = store.getActivePlan(runId)
+        if (!latestPlan || latestPlan.planId !== plan.planId || latestPlan.status !== 'SUBMITTING') throw new PolicyRunStateError('STALE_PLAN', 'The approved plan is no longer active.')
+        // This is deliberately the last authority check before releasing the
+        // exact payload to the host. A host delay cannot turn an expired plan
+        // into a writable submission.
+        assertPlanNotExpired(latestPlan)
         const payload = Object.freeze({ ...buildSpotOrderArguments(fresh.order) })
         const ticket: HostOrderSubmission = Object.freeze({
           runId,

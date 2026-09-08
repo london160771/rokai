@@ -31,7 +31,7 @@ approve
 
 When live execution is explicitly enabled on the supported host, Rokai returns one exact approved order payload for the host to send, verifies the order, rereads balances, and recalculates all five rules. The actual quantity and result depend on live Binance filters, fees, price, and slippage; no fixed BNB amount is promised.
 
-## Verified first execution
+## Real Execution Evidence
 
 Rokai has completed one real Agentic Spot execution through the supported host. The order was:
 
@@ -52,11 +52,17 @@ The real fill exposed a Binance lot-size quantization edge case. Rokai was subse
 ## Agent OS architecture
 
 ```text
-User
-  → Rokai Skill
-  → Supported Agent OS Host (such as Codex)
-  → Binance Agent OS / MCP
-  → Agentic Account
+User policy
+→ Codex / supported authenticated host
+→ Binance Agent OS MCP reads
+→ Rokai deterministic planner
+→ authoritative plan + preflight
+→ explicit human approval
+→ fresh preflight
+→ exact Binance Agent OS order
+→ order verification
+→ fresh portfolio reread
+→ policy verification
 ```
 
 The supported flow is `Codex authenticated Binance MCP → Rokai skill → deterministic policy/planning/safety → human approval → Codex sanctioned Binance tool call → Rokai verification`. Rokai is designed to run as an Agent OS skill inside a supported host. The website in this repository is a public landing page and visual explainer; it is not the execution interface and does not directly authenticate to Binance.
@@ -132,6 +138,7 @@ Every step remains visible. The public website is informational only and never c
 - Protected assets cannot be selected as sellers.
 - Approval is required before any state-changing action.
 - There is no automatic write retry; uncertain, stale, partial, duplicate, or non-improving outcomes stop safely.
+- Plan expiry is checked immediately before the exact executable payload is released. An expired plan cannot be revived; it requires a fresh deterministic plan and fresh approval.
 - The public demo is read-only. The skill's execution phase permits only one explicitly approved Spot order at a time, up to three per run, then rereads and verifies the account before replanning; it never converts, transfers, or withdraws funds.
 - The supported-host adapter allowlist is limited to `spot.exchangeInfo`, `spot.getAccount`, `spot.tickerPrice`, `spot.newOrder`, and `spot.getOrder`; live writes remain disabled by default. If Binance exposes an Agentic identity marker, it must validate; if it does not, Rokai reports that limitation and applies the strongest available Spot/account/trading checks.
 - An asset omitted by `omitZeroBalances` is treated as a zero-value target only when the policy names it as a destination or minimum-allocation target; the source must be present with sufficient free balance. FULL-response commissions are reconciled in the source, target, or third fee asset, and protected fee assets cannot decrease. Actual average fill price is calculated from executed quantity and cumulative quote quantity and must remain within the fixed MVP deviation limit.
@@ -144,10 +151,16 @@ Every step remains visible. The public website is informational only and never c
 1. Open this repository in a supported Agent OS host such as Codex.
 2. Connect Binance MCP through the host using Binance’s official instructions: <https://developers.binance.com/en/docs/agent-native/mcp-server/agentic>.
 3. Load the root [`SKILL.md`](./SKILL.md).
-4. For a one-off run, start the deterministic runtime bridge with `npm run rokai -- --interactive`. For repeated policies, use Ready Mode: `npm run rokai -- --ready`. Ready Mode loads Rokai once, reports the effective live gate, and keeps the same JSON-lines process alive for multiple runs and approvals.
-5. Codex passes the exact raw `spot.getAccount`, `spot.tickerPrice`, and `spot.exchangeInfo` results to each `start` request; the runtime invokes the existing host-mediated session and keeps its in-memory authority alive for later approval and verification. The first exchange-info result for each symbol may be reused for 45 seconds; account balances, prices, approval state, and order status are never cached for execution.
+4. Start Ready Mode with `npm run --silent rokai -- --ready`. It creates a capability-bound, runtime-owned temporary request directory and keeps one process alive for multiple policies and approvals. Use the repo-owned helper for each request:
+
+   ```text
+   npm run --silent rokai:request -- --runtime-directory "<transport.requestDirectory>" --capability "<transport.capability>" "<request-input-file>"
+   ```
+
+   The helper atomically writes `<requestId>.request.json` and reads `<requestId>.response.json`; this avoids Windows terminal limits without a proxy, named pipe, network listener, or ad-hoc bridge script.
+5. Codex passes the exact raw `spot.getAccount`, `spot.tickerPrice`, and first `spot.exchangeInfo` results through the file request; the runtime invokes the existing host-mediated session and keeps its in-memory authority alive for later approval and verification. The first exchange-info result for each symbol may be reused for 45 seconds, so do not resend the large permission matrix while the response reports a valid cache hit; account balances, prices, approval state, and order status are never cached for execution.
 6. Start with a read-only request such as: “Run a Rokai policy check for: Keep at least 40% in USDC, never sell BTC, and no altcoin above 20%.” Review the runtime timings returned with each response. Host MCP network time is outside the local runtime timing and should be measured by Codex around its read calls.
-7. Review the runtime's rule results and plan. Only a response with `authoritativePlan: true`, `plan.preflight: "PASS"`, a plan ID, and a deterministic action is approvable. The model must not calculate or edit quantities, quoteOrderQty, symbols, sides, filters, or rounding. After a separately authorized approval, Codex may send only that returned payload once, then supply `spot.getOrder` and fresh rereads for Rokai verification. If the runtime is unavailable, stop before approval or execution.
+7. Review the runtime's rule results and plan. Only a response with `authoritativePlan: true`, `plan.preflight: "PASS"`, a plan ID, and a deterministic action is approvable. The model must not calculate or edit quantities, quoteOrderQty, symbols, sides, filters, or rounding. After a separately authorized approval, Codex may send only that returned payload once, then supply `spot.getOrder` and fresh rereads for Rokai verification. If the runtime or its file transport is unavailable, stop before approval or execution.
 
 For the actual filter-aware demo, a single order must meet Binance's live minimum notional and quantity filters. With the test exchange filters used here (`MIN_NOTIONAL` $10), a $10 portfolio cannot safely fund the two-step reserve-plus-BTC example after buffers and fees; plan for approximately $50 or more, subject to the live symbol filters and prices. Never weaken exchange filters to fit a demo amount.
 

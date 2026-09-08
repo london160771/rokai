@@ -23,12 +23,12 @@ const supportedRules = [
 ]
 
 const workflow = [
-  { number: '01', title: 'Read', copy: 'Use Binance Agent OS to read Spot balances and the prices needed to value them.' },
-  { number: '02', title: 'Interpret', copy: 'Turn plain-English policy into one of five explicit, reviewable rule types.' },
-  { number: '03', title: 'Evaluate', copy: 'Run deterministic portfolio math to find exactly what is satisfied or broken.' },
-  { number: '04', title: 'Plan', copy: 'Choose one safest next trade without touching protected assets.' },
-  { number: '05', title: 'Approve', copy: 'Show the exact asset, side, amount, and expected before → after result.' },
-  { number: '06', title: 'Execute → Verify', copy: 'After approval, use sanctioned Spot tools, then reread and recalculate everything.' },
+  { number: '01', title: 'Policy', copy: 'State what must remain true in plain English.' },
+  { number: '02', title: 'Detect violation', copy: 'Rokai reads the Agentic Spot account and evaluates every rule deterministically.' },
+  { number: '03', title: 'Deterministic plan', copy: 'Rokai chooses one safest next trade and shows its expected effect.' },
+  { number: '04', title: 'Explicit approval', copy: 'Review the exact action and approve it before anything can change.' },
+  { number: '05', title: 'Agent OS execution', copy: 'Codex sends only the exact approved Spot payload through Binance Agent OS.' },
+  { number: '06', title: 'Fresh verification', copy: 'Rokai rereads the portfolio and verifies the original policy result.' },
 ]
 
 const setupSteps = [
@@ -69,7 +69,7 @@ function App() {
         <div className="hero-copy reveal-item">
           <p className="eyebrow"><span className="eyebrow-line" /> PORTFOLIO POLICY AGENT</p>
           <h1>AI that follows your rules, <em>not the market hype.</em></h1>
-          <p className="hero-lede">Rokai turns a plain-English portfolio policy into a deterministic, reviewable action plan for Binance Agent OS.</p>
+          <p className="hero-lede">Rokai turns plain-English policy into one deterministic, reviewable next trade—then waits for approval before Codex uses Binance Agent OS and verifies the result.</p>
           <div className="hero-actions">
             <a className="primary-link" href="#workflow">See the workflow <ArrowRight size={16} /></a>
             <a className="quiet-link" href="#how-to-use">How to use Rokai <ChevronRight size={15} /></a>
@@ -142,7 +142,7 @@ function App() {
       </section>
 
       <section className="verified-section section" id="verified-execution">
-        <div className="section-heading reveal-item"><div className="section-label"><span>04</span><span>VERIFIED EXECUTION</span></div><h2>Proof that the guardrails hold.</h2><p>One real Agentic Spot execution made it through approval, filled, and was checked against the original policy.</p></div>
+        <div className="section-heading reveal-item"><div className="section-label"><span>04</span><span>VERIFIED EXECUTION</span></div><h2>Proof that the guardrails hold.</h2><p>One real Agentic Spot execution, carried by the authenticated Codex host, made it through approval, filled, and was checked against the original policy.</p></div>
         <div className="verified-grid">
           <div className="verified-summary reveal-item">
             <span className="verified-kicker">REAL BNBUSDT EXECUTION</span>

@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
+import { createRokaiFileTransport } from '../server/rokaiFileTransport.js'
 import { createRokaiRuntimeController, runRokaiRuntime } from '../server/rokaiRuntime.js'
 
 function output(value: unknown) {
@@ -9,7 +10,8 @@ function output(value: unknown) {
 function usage() {
   process.stdout.write('Usage: npm run rokai -- --input-file <path> | --input-json <json> | --stdin\n')
   process.stdout.write('Persistent host session: npm run rokai -- --interactive\n')
-  process.stdout.write('Ready Mode: npm run rokai -- --ready\n')
+  process.stdout.write('Ready Mode (local file transport): npm run --silent rokai -- --ready\n')
+  process.stdout.write('Ready Mode request envelope: {"capability":"<ready capability>","requestId":"<unique id>","request":<Rokai runtime request>}\n')
 }
 
 function argumentValue(args: string[], name: string) {
@@ -44,13 +46,34 @@ async function runPersistent(announceReady = false) {
   }
 }
 
+async function runReady() {
+  const controller = createRokaiRuntimeController()
+  const transport = await createRokaiFileTransport((request) => controller.handle(request))
+  const shutdown = () => { void transport.close() }
+  process.once('SIGINT', shutdown)
+  process.once('SIGTERM', shutdown)
+  output({ ...controller.handle({ op: 'ready' }), transport: transport.info })
+  try {
+    await transport.wait()
+  } finally {
+    process.off('SIGINT', shutdown)
+    process.off('SIGTERM', shutdown)
+    await transport.close()
+  }
+}
+
 const args = process.argv.slice(2)
 if (args.includes('--help')) {
   usage()
 } else if (args.includes('--interactive')) {
   await runPersistent()
 } else if (args.includes('--ready')) {
-  await runPersistent(true)
+  try {
+    await runReady()
+  } catch (error) {
+    output({ ok: false, runtime: 'rokai', operation: 'error', error: error instanceof Error ? error.message : 'Ready Mode could not start.' })
+    process.exitCode = 1
+  }
 } else {
   try {
     const raw = await readOneShotInput(args)
